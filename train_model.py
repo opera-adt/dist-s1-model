@@ -1,7 +1,5 @@
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
-from rasterio.plot import show
 import torch
 from scipy.special import expit, logit
 

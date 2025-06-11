@@ -2,6 +2,7 @@ import matplotlib.animation as animation
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 
 def log_ratio(pre_imgs, target, is_logit=True, method='mean'):
@@ -94,10 +95,10 @@ def visualize_reconstruction(
         vmax_vh = torch.max(post_img[1, ...])
 
     pred_mean_vv = axs[0, 0].imshow(pred_mean[0, ...], vmin=vmin_vv, vmax=vmax_vv, interpolation='None')
-    axs[0, 0].set_title(f'{model_type} ' + 'Pred Mean VV, MSE={:.4f}'.format(pred_vs_true_mse))
+    axs[0, 0].set_title(f'{model_type} ' + f'Pred Mean VV, MSE={pred_vs_true_mse:.4f}')
     axs[0, 0].axis('off')
     pred_mean_vh = axs[0, 1].imshow(pred_mean[1, ...], vmin=vmin_vh, vmax=vmax_vh, interpolation='None')
-    axs[0, 1].set_title(f'{model_type} ' + 'Pred Mean VH, NLL={:.4f}'.format(pred_vs_true_nll))
+    axs[0, 1].set_title(f'{model_type} ' + f'Pred Mean VH, NLL={pred_vs_true_nll:.4f}')
     axs[0, 1].axis('off')
     plt.colorbar(pred_mean_vv, ax=axs[0, 0])
     plt.colorbar(pred_mean_vh, ax=axs[0, 1])
@@ -105,10 +106,10 @@ def visualize_reconstruction(
     plt.subplots_adjust(hspace=0.3)
 
     mean_vv = axs[1, 0].imshow(mean_image[0, ...], vmin=vmin_vv, vmax=vmax_vv, interpolation='None')
-    axs[1, 0].set_title('Avg Pre Img VV, MSE={:.4f}'.format(naive_vs_true_mse))
+    axs[1, 0].set_title(f'Avg Pre Img VV, MSE={naive_vs_true_mse:.4f}')
     axs[1, 0].axis('off')
     mean_vh = axs[1, 1].imshow(mean_image[1, ...], vmin=vmin_vh, vmax=vmax_vh, interpolation='None')
-    axs[1, 1].set_title('Avg Pre Img VH, NLL={:.4f}'.format(naive_vs_true_nll))
+    axs[1, 1].set_title(f'Avg Pre Img VH, NLL={naive_vs_true_nll:.4f}')
     axs[1, 1].axis('off')
     plt.colorbar(mean_vv, ax=axs[1, 0])
     plt.colorbar(mean_vh, ax=axs[1, 1])
@@ -234,7 +235,8 @@ def nll_gaussian(mean, logvar, value, pi=None):
     """Compute negative log-likelihood of Gaussian."""
     assert mean.size() == logvar.size() == value.size()
 
-    # this is just for efficiency reasons - the below line is actually quite slow if you're calling this function each batch
+    # this is just for efficiency reasons - the below line is actually quite slow
+    #  if you're calling this function each batch
     if pi is None:
         pi = torch.FloatTensor([np.pi]).to(value.device)
 

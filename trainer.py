@@ -16,6 +16,9 @@ from torch.utils.data import DataLoader
 os.environ['WITH_CUDA'] = 'true'
 os.environ['DEV_DTYPE'] = 'float32'
 
+TRAIN_PATH = 'PytorchData/train_12813.pt'
+TEST_PATH = 'PytorchData/test_3204.pt'
+
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 
@@ -39,7 +42,7 @@ def run_epoch_tf(dataloader, model, optimizer, device, train=True):
     naive_nll = 0
     naive_mse = 0
 
-    for batch_idx, (batch, target) in enumerate(dataloader):
+    for _, (batch, target) in enumerate(dataloader):
         input_size = 16
 
         batch = batch.unfold(3, input_size, input_size).unfold(4, input_size, input_size)
@@ -110,8 +113,8 @@ def run_epoch_tf(dataloader, model, optimizer, device, train=True):
 
 
 pi = torch.FloatTensor([np.pi]).to(device)
-train_dataset = torch.load('PytorchData/train_12813.pt', weights_only=False)
-test_dataset = torch.load('PytorchData/test_3204.pt', weights_only=False)
+train_dataset = torch.load(TRAIN_PATH, weights_only=False)
+test_dataset = torch.load(TEST_PATH, weights_only=False)
 
 train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
 test_loader = DataLoader(test_dataset, batch_size=32, shuffle=True)

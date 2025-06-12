@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt
 import torch
 import torch.nn.functional as F
 
-from utils import nll_gaussian, nll_gaussian_stable
+from src.utils import nll_gaussian, nll_gaussian_stable
 
 
 def log_ratio(pre_imgs, target, is_logit=True, method='mean'):

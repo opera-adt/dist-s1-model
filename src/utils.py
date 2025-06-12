@@ -15,7 +15,7 @@ from einops._torch_specific import allow_ops_in_compiled_graph
 from scipy.special import logit
 from tqdm.auto import tqdm
 
-from dist_model import SpatioTemporalTransformer
+from src.dist_model import SpatioTemporalTransformer
 
 
 # Dtype selection

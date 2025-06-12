@@ -1,4 +1,3 @@
-import os
 import time
 from datetime import datetime
 
@@ -6,18 +5,53 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn.functional as F
-from distmetrics.transformer import SpatioTemporalTransformer
+from src.dist_model import SpatioTemporalTransformer
 from src.utils import nll_gaussian, nll_gaussian_stable
 from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import DataLoader
 
 
-# If you are using the dev version
-os.environ['WITH_CUDA'] = 'true'
-os.environ['DEV_DTYPE'] = 'float32'
+########################################################
 
-TRAIN_PATH = 'PytorchData/train_12813.pt'
-TEST_PATH = 'PytorchData/test_3204.pt'
+# If you are using the dev version
+# os.environ['WITH_CUDA'] = 'true'
+# os.environ['DEV_DTYPE'] = 'float32'
+
+max_num_pre_imgs = 10
+patch_size = 8
+input_size_tf = 16
+num_patches = int((input_size_tf / patch_size) ** 2)
+
+
+train_config = {
+    'batch_size': 1,
+    'num_epochs': 50,  # ideally 100+
+    'learning_rate': 1e-4,
+    'seed': 177,
+    # StepLR
+    'step_size': 25,
+    'gamma': 0.1,
+}
+
+tf_config = {
+    'type': 'transformer',
+    'patch_size': patch_size,
+    'num_patches': num_patches,
+    'data_dim': int(2 * patch_size * patch_size),
+    'd_model': 256,  # embedding dimension
+    'nhead': 4,
+    'num_encoder_layers': 4,
+    'dim_feedforward': 768,
+    'max_seq_len': max_num_pre_imgs,
+    'dropout': 0.2,  # can be between .1 - .3
+    'activation': 'relu',
+}
+
+
+TRAIN_PATH = 'training_data/sample/train_12813.pt'
+TEST_PATH = 'training_data/sample/test_3204.pt'
+
+########################################################
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -119,36 +153,8 @@ test_dataset = torch.load(TEST_PATH, weights_only=False)
 train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
 test_loader = DataLoader(test_dataset, batch_size=32, shuffle=True)
 
-num_pre_imgs = 10
-patch_size = 8
-input_size_rnn = 8
-input_size_tf = 16
-num_patches = int((input_size_tf / patch_size) ** 2)
-
-train_config = {
-    'batch_size': 1,
-    'num_epochs': 50,  # ideally 100+
-    'learning_rate': 1e-4,
-    'seed': 177,
-}
-
-tf_config = {
-    'type': 'transformer',
-    'patch_size': patch_size,
-    'num_patches': num_patches,
-    'data_dim': int(2 * patch_size * patch_size),
-    'd_model': 256,  # embedding dimension
-    'nhead': 4,
-    'num_encoder_layers': 4,
-    'dim_feedforward': 768,
-    'max_seq_len': num_pre_imgs,
-    'dropout': 0.2,  # can be .1 - .3
-    'activation': 'relu',
-}
-
 model = SpatioTemporalTransformer(tf_config)
 print('Number of parameters: ', model.num_parameters())
-
 
 now = datetime.now()
 now = now.strftime('%m-%d-%Y %H:%M')
@@ -164,16 +170,14 @@ model_type = 'tf'
 # Initialize optimizer (default using ADAM optimizer)
 optimizer = torch.optim.Adam(model.parameters(), lr=train_config['learning_rate'])
 
-step_size = 25
-gamma = 0.1
-scheduler = StepLR(optimizer, step_size=step_size, gamma=gamma)
+scheduler = StepLR(optimizer, step_size=train_config['step_size'], gamma=train_config['gamma'])
 
 training_notes = {
     'trainsetsize': len(train_dataset),
     'bursts': 'all',
     'total_params': model.num_parameters(),
-    'step size': step_size,
-    'gamma': gamma,
+    'step size': train_config['step_size'],
+    'gamma': train_config['gamma'],
     'other': 'summer model, aurora data',
 }
 
@@ -207,7 +211,7 @@ for epoch in range(1, train_config['num_epochs'] + 1):
     if epoch % 5 == 0 and epoch != 0:
         # Save model
 
-        folder_path = 'models'
+        folder_path = 'model_weights'
         file_name = f'{tf_config["type"]}_{now}.pth'
         full_path = f'{folder_path}/{file_name}'
 

@@ -87,3 +87,16 @@ __pycache__/
 
 # Coverage
 *.coverage
+
+
+# training data
+training_data/
+
+# outputs
+out/
+
+# figs
+figs/
+
+# model weights
+model_weights/

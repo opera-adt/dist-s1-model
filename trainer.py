@@ -150,9 +150,12 @@ pi = torch.FloatTensor([np.pi]).to(device)
 train_dataset = torch.load(TRAIN_PATH, weights_only=False)
 test_dataset = torch.load(TEST_PATH, weights_only=False)
 
+print('opening train and test datasets...')
 train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
 test_loader = DataLoader(test_dataset, batch_size=32, shuffle=True)
+print('train and test datasets opened')
 
+print('initializing model...')
 model = SpatioTemporalTransformer(tf_config)
 print('Number of parameters: ', model.num_parameters())
 

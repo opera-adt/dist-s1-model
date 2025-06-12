@@ -48,8 +48,8 @@ tf_config = {
 }
 
 
-TRAIN_PATH = 'training_data/sample/train_12813.pt'
-TEST_PATH = 'training_data/sample/test_3204.pt'
+TRAIN_PATH = 'training_data/original/train_12813.pt'
+TEST_PATH = 'training_data/original/test_3204.pt'
 
 ########################################################
 

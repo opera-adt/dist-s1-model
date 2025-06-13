@@ -100,3 +100,7 @@ figs/
 
 # model weights
 model_weights/
+
+# std err and out
+*.err
+*.out

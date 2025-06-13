@@ -1,12 +1,13 @@
 import time
 from datetime import datetime
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn.functional as F
 from src.dist_model import SpatioTemporalTransformer
-from src.utils import nll_gaussian, nll_gaussian_stable
+from src.utils import _optimize_model, nll_gaussian, nll_gaussian_stable
 from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import DataLoader
 
@@ -21,16 +22,19 @@ max_num_pre_imgs = 10
 patch_size = 8
 input_size_tf = 16
 num_patches = int((input_size_tf / patch_size) ** 2)
+dtype = 'float16'
 
 
 train_config = {
     'batch_size': 1,
-    'num_epochs': 50,  # ideally 100+
+    'num_epochs': 250,  # ideally 100+
     'learning_rate': 1e-4,
     'seed': 177,
     # StepLR
     'step_size': 25,
     'gamma': 0.1,
+    'dtype': dtype,
+    'compile': False,
 }
 
 tf_config = {
@@ -48,8 +52,8 @@ tf_config = {
 }
 
 
-TRAIN_PATH = 'training_data/original/train_12813.pt'
-TEST_PATH = 'training_data/original/test_3204.pt'
+TRAIN_PATH = 'training_data/original/train_data.pt'
+TEST_PATH = 'training_data/original/test_data.pt'
 
 ########################################################
 
@@ -155,18 +159,20 @@ train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
 test_loader = DataLoader(test_dataset, batch_size=32, shuffle=True)
 print('train and test datasets opened')
 
-print('initializing model...')
-model = SpatioTemporalTransformer(tf_config)
-print('Number of parameters: ', model.num_parameters())
-
 now = datetime.now()
-now = now.strftime('%m-%d-%Y %H:%M')
+now_ts = now.strftime('%m-%d-%Y %H:%M')
+now_date = now.strftime('%Y-%m-%d')
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 print(device)
 
+print('loading model...')
 model = SpatioTemporalTransformer(tf_config).to(device)
-print('Number of parameters: ', model.num_parameters())
+if train_config['compile']:
+    model = _optimize_model(model, dtype=dtype, device=device, batch_size=train_config['batch_size'])
+    print('Number of parameters: ', model.num_parameters())
+print('model loaded')
+
 model_type = 'tf'
 
 
@@ -181,6 +187,7 @@ training_notes = {
     'total_params': model.num_parameters(),
     'step size': train_config['step_size'],
     'gamma': train_config['gamma'],
+    'dtype': dtype,
     'other': 'summer model, aurora data',
 }
 
@@ -214,11 +221,15 @@ for epoch in range(1, train_config['num_epochs'] + 1):
     if epoch % 5 == 0 and epoch != 0:
         # Save model
 
-        folder_path = 'model_weights'
-        file_name = f'{tf_config["type"]}_{now}.pth'
-        full_path = f'{folder_path}/{file_name}'
+        model_dir_path = f'model_weights/{now_date}'
+        Path(model_dir_path).mkdir(parents=True, exist_ok=True)
+        file_name = f'{tf_config["type"]}_{now_ts}.pth'
+        full_path = f'{model_dir_path}/{file_name}'
 
         torch.save(model.state_dict(), full_path)
+
+        fig_dir = Path('figs')
+        Path(fig_dir).mkdir(parents=True, exist_ok=True)
 
         # Plot Negative Log Likelihood Loss
         plt.figure()
@@ -228,7 +239,7 @@ for epoch in range(1, train_config['num_epochs'] + 1):
         plt.title('Negative Log Likelihood Loss')
         plt.xlabel('Epoch')
         plt.ylabel('Loss')
-        plt.savefig(f'figs/nll_loss_curve_{now}.png', dpi=200, bbox_inches='tight', pad_inches=0)
+        plt.savefig(f'figs/nll_loss_curve_{now_ts}.png', dpi=200, bbox_inches='tight', pad_inches=0)
 
         # Start a new figure before plotting MSE
         plt.figure()
@@ -238,6 +249,6 @@ for epoch in range(1, train_config['num_epochs'] + 1):
         plt.title('Mean Squared Error Loss')
         plt.xlabel('Epoch')
         plt.ylabel('Loss')
-        plt.savefig(f'figs/mse_loss_curve_{now}.png', dpi=200, bbox_inches='tight', pad_inches=0)
+        plt.savefig(f'figs/mse_loss_curve_{now_ts}.png', dpi=200, bbox_inches='tight', pad_inches=0)
 
     scheduler.step()

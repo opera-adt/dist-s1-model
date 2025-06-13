@@ -9,13 +9,52 @@ import numpy as np
 import torch
 import torch.mps
 import torch.nn.functional as F
-from distmetrics.mahalanobis import _transform_pre_arrs
-from distmetrics.model_data.transformer_config import transformer_config, transformer_latest_config
 from einops._torch_specific import allow_ops_in_compiled_graph
 from scipy.special import logit
 from tqdm.auto import tqdm
 
 from src.dist_model import SpatioTemporalTransformer
+
+
+transformer_latest_config = {
+    'type': 'transformer',
+    'patch_size': 8,
+    'num_patches': 4,
+    'data_dim': 128,
+    'd_model': 256,
+    'nhead': 4,
+    'num_encoder_layers': 4,
+    'dim_feedforward': 768,
+    'max_seq_len': 10,
+    'dropout': 0.2,
+    'activation': 'relu',
+}
+
+transformer_config = {
+    'type': 'transformer (space and time pos encoding)',
+    'patch_size': 8,
+    'num_patches': 4,
+    'data_dim': 128,  # 2 * patch_size * patch_size
+    'd_model': 256,
+    'nhead': 4,
+    'num_encoder_layers': 2,
+    'dim_feedforward': 512,
+    'max_seq_len': 10,
+    'dropout': 0.2,
+    'activation': 'relu',
+}
+
+
+def _transform_pre_arrs(
+    pre_arrs_vv: list[np.ndarray], pre_arrs_vh: list[np.ndarray], logit_transformed: bool = False
+) -> np.ndarray:
+    if len(pre_arrs_vh) != len(pre_arrs_vv):
+        raise ValueError('Both vv and vh pre-arrays must have the same length')
+    dual_pol = [np.stack([vv, vh], axis=0) for (vv, vh) in zip(pre_arrs_vv, pre_arrs_vh)]
+    ts = np.stack(dual_pol, axis=0)
+    if logit_transformed:
+        ts = logit(ts)
+    return ts
 
 
 # Dtype selection
@@ -115,6 +154,40 @@ def control_flow_for_device(device: str | None = None) -> str:
     return device
 
 
+def _optimize_model(
+    transformer: torch.nn.Module, dtype: str, device: str, batch_size: int, cuda_latest: bool = False
+) -> torch.nn.Module:
+    allow_ops_in_compiled_graph()
+
+    if device == 'cuda' and cuda_latest:
+        import torch_tensorrt
+
+        # Get dimensions
+        total_pixels = transformer.num_patches * (transformer.patch_size**2)
+        wh = math.isqrt(total_pixels)
+        channels = transformer.data_dim // (transformer.patch_size**2)
+        expected_dims = (batch_size, transformer.max_seq_len, channels, wh, wh)
+
+        transformer = torch_tensorrt.compile(
+            transformer,
+            inputs=[
+                torch_tensorrt.Input(
+                    min_shape=(1,) + expected_dims[1:],
+                    opt_shape=expected_dims,
+                    max_shape=expected_dims,
+                    dtype=dtype,
+                )
+            ],
+            enabled_precisions={dtype},  # e.g., {torch.float}, {torch.float16}
+            truncate_long_and_double=True,  # Optional: helps prevent type issues
+        )
+    elif device == 'cuda' and not cuda_latest:
+        transformer = torch.compile(transformer, backend='inductor')
+    else:
+        transformer = torch.compile(transformer, mode='max-autotune-no-cudagraphs', dynamic=False)
+    return transformer
+
+
 def load_transformer_model(
     model_token: str = 'latest',
     model_cfg_path: Path | None = None,
@@ -153,33 +226,7 @@ def load_transformer_model(
     transformer = transformer.eval()
 
     if optimize:
-        allow_ops_in_compiled_graph()
-
-        if device == 'cuda':
-            import torch_tensorrt
-
-            # Get dimensions
-            total_pixels = transformer.num_patches * (transformer.patch_size**2)
-            wh = math.isqrt(total_pixels)
-            channels = transformer.data_dim // (transformer.patch_size**2)
-            expected_dims = (batch_size, transformer.max_seq_len, channels, wh, wh)
-
-            transformer = torch_tensorrt.compile(
-                transformer,
-                inputs=[
-                    torch_tensorrt.Input(
-                        min_shape=(1,) + expected_dims[1:],
-                        opt_shape=expected_dims,
-                        max_shape=expected_dims,
-                        dtype=dtype,
-                    )
-                ],
-                enabled_precisions={dtype},  # e.g., {torch.float}, {torch.float16}
-                truncate_long_and_double=True,  # Optional: helps prevent type issues
-            )
-
-        else:
-            transformer = torch.compile(transformer, mode='max-autotune-no-cudagraphs', dynamic=False)
+        transformer = _optimize_model(transformer, dtype=dtype, device=device)
 
     _MODEL = transformer
 

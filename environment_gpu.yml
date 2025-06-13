@@ -1,4 +1,4 @@
-name: dist-s1-model
+name: dist-s1-model-gpu
 dependencies:
  - python>=3.12
  - asf_search
@@ -13,7 +13,6 @@ dependencies:
  - geopandas
  - jupyterlab
  - matplotlib
- - distmetrics
  - numpy
  - pandas
  - pydantic
@@ -29,4 +28,4 @@ dependencies:
  - setuptools_scm
  - shapely
  - tqdm
- - pip
+ - triton

@@ -1,7 +1,0 @@
-name: dist-s1
-dependencies:
-  - python-dotenv
-  - pip:
-    - elasticsearch==7.13.4 # https://github.com/nasa/opera-sds-pcm/blob/develop/setup.py#L74
-    - elasticsearch-dsl<8.0 # To ensure version 7 is compatible: https://elasticsearch-dsl.readthedocs.io/en/latest/#compatibility
-

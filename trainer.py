@@ -221,7 +221,7 @@ for epoch in range(1, train_config['num_epochs'] + 1):
     if epoch % 5 == 0 and epoch != 0:
         # Save model
 
-        model_dir_path = f'model_weights/{now_date}'
+        model_dir_path = 'model_weights'
         Path(model_dir_path).mkdir(parents=True, exist_ok=True)
         file_name = f'{tf_config["type"]}_{now_ts}.pth'
         full_path = f'{model_dir_path}/{file_name}'

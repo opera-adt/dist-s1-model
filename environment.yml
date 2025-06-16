@@ -1,0 +1,33 @@
+name: dist-s1-model
+dependencies:
+ - python>=3.12
+ - asf_search
+ - backoff
+ - compilers
+ - einops
+ - flake8
+ - flake8-blind-except
+ - flake8-builtins
+ - flake8-import-order
+ - gdal
+ - geopandas
+ - jupyterlab
+ - matplotlib
+ - distmetrics
+ - numpy
+ - pandas
+ - pydantic
+ - pytest
+ - pytest-cov
+ - pytorch
+ - rasterio>=1.4.0  # merge was improved in minor release
+ - requests
+ - ruff
+ - scikit-image
+ - scipy
+ - setuptools
+ - setuptools_scm
+ - shapely
+ - tqdm
+ - pip:
+    - tensorrt

@@ -1,9 +1,13 @@
-name: dist-s1-model-gpu
+name: dist-s1-model
+channels:
+  - conda-forge
+channel_priority: strict
 dependencies:
  - python>=3.12
  - asf_search
  - backoff
  - compilers
+ - cudatoolkit>=11.8
  - einops
  - flake8
  - flake8-blind-except
@@ -18,7 +22,7 @@ dependencies:
  - pydantic
  - pytest
  - pytest-cov
- - pytorch>=*=cuda118*
+ - pytorch
  - rasterio>=1.4.0  # merge was improved in minor release
  - requests
  - ruff
@@ -28,4 +32,11 @@ dependencies:
  - setuptools_scm
  - shapely
  - tqdm
- - triton
+ - wandb
+ - pip:
+   - tensorrt
+   - torch 
+   - torchvision 
+   - torchaudio
+   - torch-tensorrt
+   - nvidia-modelopt[all]

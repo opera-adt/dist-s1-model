@@ -86,16 +86,18 @@ def nll_gaussian(mean, logvar, value, pi=None):
     return out
 
 
-def nll_gaussian_stable(mean, variance, value):
+def nll_gaussian_stable(mean, variance, value, pi=None):
     """Compute negative log-likelihood of Gaussian."""
     assert mean.size() == variance.size() == value.size()
-    pi = torch.FloatTensor([np.pi]).to(value.device)
+
+    if pi is None:
+      pi = torch.FloatTensor([np.pi]).to(value.device)
 
     logvar = torch.log(variance)
 
-    nll_element = (value - mean).pow(2) / variance + logvar + torch.log(2 * pi)
+    nll_element = (value - mean).pow(2) / variance + logvar + torch.log(2*pi)
 
-    return torch.mean(0.5 * nll_element)
+    return torch.mean(0.5*nll_element)
 
 
 def unfolding_stream(

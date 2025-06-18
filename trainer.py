@@ -109,6 +109,14 @@ def save_checkpoint(model, optimizer, scheduler, epoch, config, metrics, checkpo
     print(f"Checkpoint saved: {checkpoint_path}")
 
 
+def load_checkpoint(checkpoint_path, model, optimizer, scheduler):
+    checkpoint = torch.load(checkpoint_path)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+    return checkpoint['epoch'], checkpoint['metrics']
+
+
 def load_validation_data(config):
     """Load validation datasets for visual evaluation"""
     val_data = {}

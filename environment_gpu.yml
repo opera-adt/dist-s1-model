@@ -1,0 +1,31 @@
+name: dist-s1-model-gpu
+dependencies:
+ - python>=3.12
+ - asf_search
+ - backoff
+ - compilers
+ - einops
+ - flake8
+ - flake8-blind-except
+ - flake8-builtins
+ - flake8-import-order
+ - gdal
+ - geopandas
+ - jupyterlab
+ - matplotlib
+ - numpy
+ - pandas
+ - pydantic
+ - pytest
+ - pytest-cov
+ - pytorch>=*=cuda118*
+ - rasterio>=1.4.0  # merge was improved in minor release
+ - requests
+ - ruff
+ - scikit-image
+ - scipy
+ - setuptools
+ - setuptools_scm
+ - shapely
+ - tqdm
+ - triton

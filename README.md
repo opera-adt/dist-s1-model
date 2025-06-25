@@ -22,6 +22,17 @@ See the notebooks. This is a work in progress!
 
 We will create another repository for curating the SAR data. TODO.
 
+## WandB
+
+To post results to wandb, set the following flags in config.yaml to have the following values
+use_wandb: True
+wandb_entity: cmarshak-nasa-jet-propulsion-laboratory 
+wandb_project: spatiotemporal-transformer
+
+Note: before using wandb for the first time, you must open a terminal session, activate the env used to run dist-s1-model code, and run
+wandb login 
+The command line will prompt you for an API key that can be found at https://wandb.ai/home 
+
 ## References
 
 - OPERA Disturbance Suite: https://www.jpl.nasa.gov/go/opera/products/dist-product-suite/

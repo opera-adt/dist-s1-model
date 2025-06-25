@@ -22,6 +22,7 @@ from datetime import datetime
 from tqdm import tqdm
 from PIL import Image
 from torchvision.transforms import ToTensor
+from einops import rearrange
 
 from src.dist_model import SpatioTemporalTransformer
 from src.utils import nll_gaussian, nll_gaussian_stable, visualize_reconstruction
@@ -294,12 +295,9 @@ def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, train=
         batch = batch.to(device)
         target = target.to(device)
 
-        # Keep the exact data loading logic as in original
-        batch = batch.unfold(3, input_size, input_size).unfold(4, input_size, input_size)
-        target = target.unfold(2, input_size, input_size).unfold(3, input_size, input_size)
-
-        batch = batch.permute(0, 3, 4, 1, 2, 5, 6).reshape(-1, 10, 2, input_size, input_size)
-        target = target.permute(0, 2, 3, 1, 4, 5).reshape(-1, 2, input_size, input_size)
+        #Data goes from Batch x Time X Channels X H x W -> (B h w) time channel ph pw, h = w = # of patches
+        batch = rearrange(batch, 'b t c (h ph) (w pw) -> (b h w) t c ph pw', ph=input_size, pw=input_size)
+        target = rearrange(target, 'b c (h ph) (w pw) -> (b h w) c ph pw', ph=input_size, pw=input_size)
 
         target = torch.special.logit(target)
         batch = torch.special.logit(batch)

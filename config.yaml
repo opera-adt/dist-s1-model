@@ -31,8 +31,9 @@ model_config:
 
 # Training configuration
 train_config:
-  batch_size: 100
-  num_epochs: 10
+  batch_size: 20
+  num_epochs: 100
+  input_size: 16
   learning_rate: 0.0001  # 1e-4
   seed: 177
   step_size: 25  # For scheduler
@@ -49,23 +50,15 @@ save_dir:
 validation:
   enable_visual_validation: true
   
+  blend_mode: 'gaussian'
+  apply_smoothing: true      # Enable post-processing
+  smooth_sigma: 0.5         # Smoothing strength
+
   landslide:
     enabled: true
     mask_path: "ValidationData/PNG_Landslide_Mask.tif"
     data_path: "ValidationData/landslide_chip.pt"
-    stride: 1
-  
-  fire:
-    enabled: true
-    mask_path: "ValidationData/fire_mask.pt"
-    data_path: "ValidationData/fire_val_data.pt"
-    stride: 4
-  
-  flood:
-    enabled: true
-    mask_path: "ValidationData/bangladesh_map.pt"
-    data_path: "ValidationData/bangladesh_val_data.pt"
-    stride: 4
+    stride: 16
 
 # Additional notes
 training_notes:

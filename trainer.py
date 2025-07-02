@@ -9,6 +9,8 @@ from pathlib import Path
 from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import StepLR
 from accelerate import Accelerator
+from torch.utils.data import DataLoader
+from einops import rearrange
 
 # Core model and utilities
 from src.dist_model import SpatioTemporalTransformer
@@ -58,8 +60,8 @@ def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accele
         batch = batch.unfold(3, input_size, input_size).unfold(4, input_size, input_size)
         target = target.unfold(2, input_size, input_size).unfold(3, input_size, input_size)
 
-        batch = batch.permute(0, 3, 4, 1, 2, 5, 6).reshape(-1, 10, 2, input_size, input_size)
-        target = target.permute(0, 2, 3, 1, 4, 5).reshape(-1, 2, input_size, input_size)
+        batch = rearrange(batch, 'b t c h w ph pw -> (b h w) t c ph pw')
+        target = rearrange(target, 'b c h w ph pw -> (b h w) c ph pw')
 
         target = torch.special.logit(target)
         batch = torch.special.logit(batch)

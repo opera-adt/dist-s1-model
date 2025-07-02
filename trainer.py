@@ -10,7 +10,11 @@ from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import StepLR
 from accelerate import Accelerator
 from torch.utils.data import DataLoader
+from torch.utils.data import random_split
 from einops import rearrange
+
+#Dataset loader
+from src.dataset import DistS1Dataset
 
 # Core model and utilities
 from src.dist_model import SpatioTemporalTransformer
@@ -200,8 +204,11 @@ def main():
     np.random.seed(config['train_config']['seed'])
     
     # Load data
-    train_dataset = torch.load(config['data']['train_path'], weights_only=False)
-    test_dataset = torch.load(config['data']['test_path'], weights_only=False)
+    dist_dataset = DistS1Dataset("/scratch/opera-dist-ml/dist-s1-data-updated") ##TODO: add to config
+
+    generator = torch.Generator().manual_seed(42)
+    train_dataset, test_dataset = random_split(dist_dataset, [train_size, test_size], generator=generator)
+
     
     # Debug dataset sizes
     if accelerator.is_main_process:

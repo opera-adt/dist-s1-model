@@ -4,6 +4,7 @@ channels:
 channel_priority: strict
 dependencies:
  - python>=3.12
+ - accelerate
  - asf_search
  - backoff
  - compilers

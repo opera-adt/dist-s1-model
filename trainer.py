@@ -10,7 +10,11 @@ from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import StepLR
 from accelerate import Accelerator
 from torch.utils.data import DataLoader
+from torch.utils.data import random_split
 from einops import rearrange
+
+#Dataset loader
+from src.dataset import DistS1Dataset
 
 # Core model and utilities
 from src.dist_model import SpatioTemporalTransformer
@@ -156,6 +160,36 @@ def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accele
 
     return nll_average, mse_average, naive_nll_average, naive_mse_average
 
+def left_pad_sequences(sequences, T_max, nodata_value=np.nan):
+    batch_size = len(sequences)
+    sample_shape = sequences[0].shape[1:] if sequences[0].ndim > 1 else ()
+
+    padded = np.full((batch_size, T_max, *sample_shape), nodata_value, dtype=sequences[0].dtype)
+    lengths = np.zeros(batch_size, dtype=np.int64)
+
+    for i, seq in enumerate(sequences):
+        T = seq.shape[0]
+        lengths[i] = T
+        padded[i, T_max - T:] = seq
+
+    return padded, lengths
+
+
+def custom_collate_fn(batch, T_max=21):
+    pre_imgs = [item["pre_imgs"] for item in batch]
+    post_img = np.stack([item["post_img"] for item in batch])
+    dts = [item['acq_dts_float'] for item in batch]
+
+    padded_pre_imgs, _ = left_pad_sequences(pre_imgs, T_max)
+    # dts include the post-img date, so we add one to T_max
+    padded_dts, _ = left_pad_sequences(dts, T_max+1)
+
+    
+    return {
+        "pre_imgs": torch.from_numpy(padded_pre_imgs),
+        "post_img": torch.from_numpy(post_img),
+        "acq_dts_float": torch.from_numpy(padded_dts)
+    }
 
 def main():
     # Initialize accelerator first
@@ -200,9 +234,28 @@ def main():
     np.random.seed(config['train_config']['seed'])
     
     # Load data
-    train_dataset = torch.load(config['data']['train_path'], weights_only=False)
-    test_dataset = torch.load(config['data']['test_path'], weights_only=False)
-    
+    dist_dataset = DistS1Dataset("/scratch/opera-dist-ml/dist-s1-data-updated") ##TODO: add to config
+    train_size = int(0.8 * len(dist_dataset))
+    test_size = len(dist_dataset) - train_size
+
+    generator = torch.Generator().manual_seed(42)
+    train_dataset, test_dataset = random_split(dist_dataset, [train_size, test_size], generator=generator)
+
+    train_loader = DataLoader(
+        dist_dataset, 
+        batch_size = config['train_config']['batch_size'],
+        shuffle = True, 
+        collate_fn = custom_collate
+    )
+
+    test_loader = DataLoader(
+        dist_dataset, 
+        batch_size = config['train_config']['batch_size'],
+        shuffle = True, 
+        collate_fn = custom_collate
+    )
+
+
     # Debug dataset sizes
     if accelerator.is_main_process:
         print(f"Dataset sizes:")

@@ -186,6 +186,11 @@ wandb_project: "your-project-name"
 wandb_entity: "your-entity"
 ```
 
+### Wandb Setup
+
+Before using wandb for the first time, you must open a terminal session, activate the `dist-s1-model` env and run
+`wandb login`. The command line will prompt you for an API key that can be found at https://wandb.ai/home.
+
 ### Visual Validation
 
 Enable visual validation to monitor training progress:

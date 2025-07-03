@@ -160,15 +160,35 @@ def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accele
 
     return nll_average, mse_average, naive_nll_average, naive_mse_average
 
-def custom_collate(batch):
-    """
-    Collate function to batch data in train_loader and test_loader
-    """
-    pre_imgs = [item['pre_imgs'] for item in batch]  # List of N x 2 x 256 x 256
-    post_imgs = torch.stack([item['post_img'] for item in batch])  # B x 2 x 256 x 256 (assumes post_img is fixed-size)
+def left_pad_sequences(sequences, T_max, nodata_value=np.nan):
+    batch_size = len(sequences)
+    sample_shape = sequences[0].shape[1:] if sequences[0].ndim > 1 else ()
+
+    padded = np.full((batch_size, T_max, *sample_shape), nodata_value, dtype=sequences[0].dtype)
+    lengths = np.zeros(batch_size, dtype=np.int64)
+
+    for i, seq in enumerate(sequences):
+        T = seq.shape[0]
+        lengths[i] = T
+        padded[i, T_max - T:] = seq
+
+    return padded, lengths
+
+
+def custom_collate_fn(batch, T_max=21):
+    pre_imgs = [item["pre_imgs"] for item in batch]
+    post_img = np.stack([item["post_img"] for item in batch])
+    dts = [item['acq_dts_float'] for item in batch]
+
+    padded_pre_imgs, _ = left_pad_sequences(pre_imgs, T_max)
+    # dts include the post-img date, so we add one to T_max
+    padded_dts, _ = left_pad_sequences(dts, T_max+1)
+
+    
     return {
-        'pre_imgs': pre_imgs,
-        'post_img': post_imgs,
+        "pre_imgs": torch.from_numpy(padded_pre_imgs),
+        "post_img": torch.from_numpy(post_img),
+        "acq_dts_float": torch.from_numpy(padded_dts)
     }
 
 def main():

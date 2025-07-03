@@ -160,6 +160,16 @@ def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accele
 
     return nll_average, mse_average, naive_nll_average, naive_mse_average
 
+def custom_collate(batch):
+    """
+    Collate function to batch data in train_loader and test_loader
+    """
+    pre_imgs = [item['pre_imgs'] for item in batch]  # List of N x 2 x 256 x 256
+    post_imgs = torch.stack([item['post_img'] for item in batch])  # B x 2 x 256 x 256 (assumes post_img is fixed-size)
+    return {
+        'pre_imgs': pre_imgs,
+        'post_img': post_imgs,
+    }
 
 def main():
     # Initialize accelerator first
@@ -205,11 +215,27 @@ def main():
     
     # Load data
     dist_dataset = DistS1Dataset("/scratch/opera-dist-ml/dist-s1-data-updated") ##TODO: add to config
+    train_size = int(0.8 * len(dist_dataset))
+    test_size = len(dist_dataset) - train_size
 
     generator = torch.Generator().manual_seed(42)
     train_dataset, test_dataset = random_split(dist_dataset, [train_size, test_size], generator=generator)
 
-    
+    train_loader = DataLoader(
+        dist_dataset, 
+        batch_size = config['train_config']['batch_size'],
+        shuffle = True, 
+        collate_fn = custom_collate
+    )
+
+    test_loader = DataLoader(
+        dist_dataset, 
+        batch_size = config['train_config']['batch_size'],
+        shuffle = True, 
+        collate_fn = custom_collate
+    )
+
+
     # Debug dataset sizes
     if accelerator.is_main_process:
         print(f"Dataset sizes:")

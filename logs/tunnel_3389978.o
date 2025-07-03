@@ -1,0 +1,55 @@
+ 
+:: initializing oneAPI environment ...
+   slurm_script: BASH_VERSION = 5.1.8(1)-release
+   args: Using "$@" for setvars.sh arguments: 
+:: advisor -- latest
+:: ccl -- latest
+:: compiler -- latest
+:: dal -- latest
+:: debugger -- latest
+:: dev-utilities -- latest
+:: dnnl -- latest
+:: dpcpp-ct -- latest
+:: dpl -- latest
+:: inspector -- latest
+:: ipp -- latest
+:: ippcp -- latest
+:: ipp -- latest
+:: itac -- latest
+:: mkl -- latest
+:: mpi -- latest
+:: tbb -- latest
+:: vtune -- latest
+:: oneAPI environment initialized ::
+ 
+Process 0: Accelerator state:
+  - Device: cuda
+  - Num processes: 1
+  - Process index: 0
+  - Local process index: 0
+  - Available GPUs: 1
+  - Distributed type: DistributedType.NO
+All processes initialized successfully!
+there were 1,100,655 samples found
+Dataset sizes:
+  - Train dataset: 880524 samples
+  - Test dataset: 220131 samples
+DataLoader info before accelerator.prepare:
+  - Train batches: 44027
+  - Test batches: 11007
+  - Train batch size: 20
+  - Effective batch size per GPU: 20
+Number of parameters: 3261952
+Process 0 - DataLoader info after accelerator.prepare:
+  - Train batches per GPU: 44027
+  - Test batches per GPU: 11007
+Expected total train batches across all GPUs: 44027
+Expected total test batches across all GPUs: 11007
+Process 0: Model device = cuda:0
+Using input_size: 16
+--- EPOCH [1/100] ---
+Process 0 starting epoch 1 on device cuda
+Process 0 GPU memory before training: 0.01 GB
+Process 0 GPU memory cached: 0.01 GB
+All processes synchronized, starting training...
+Training completed or interrupted. All resources cleaned up.

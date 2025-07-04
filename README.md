@@ -124,7 +124,7 @@ use_cpu: false
 ### Single GPU Training
 
 ```bash
-python trainer.py config.yaml
+python trainer.py config.yml
 ```
 
 ### Multi-GPU Training with Accelerate

@@ -104,3 +104,16 @@ model_weights/
 # std err and out
 *.err
 *.out
+
+# wandb logs
+wandb/
+
+# models
+checkpoints/
+models/
+
+# Viz
+visualizations/
+
+# Test yml files
+config-*.yml

@@ -1,6 +1,10 @@
 name: dist-s1-model
+channels:
+  - conda-forge
+channel_priority: strict
 dependencies:
  - python>=3.12
+ - accelerate
  - asf_search
  - backoff
  - compilers
@@ -13,7 +17,6 @@ dependencies:
  - geopandas
  - jupyterlab
  - matplotlib
- - distmetrics
  - numpy
  - pandas
  - pydantic
@@ -29,5 +32,10 @@ dependencies:
  - setuptools_scm
  - shapely
  - tqdm
+ - wandb
  - pip:
-    - tensorrt
+   - tensorrt
+   - torch 
+   - torchvision 
+   - torchaudio
+   - torch-tensorrt

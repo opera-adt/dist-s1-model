@@ -1,6 +1,10 @@
-name: dist-s1-model-gpu
+name: dist-s1-model
+channels:
+  - conda-forge
+channel_priority: strict
 dependencies:
- - python>=3.12
+ - python>=3.12,<3.13
+ - accelerate
  - asf_search
  - backoff
  - compilers
@@ -18,7 +22,7 @@ dependencies:
  - pydantic
  - pytest
  - pytest-cov
- - pytorch>=*=cuda118*
+ - pytorch
  - rasterio>=1.4.0  # merge was improved in minor release
  - requests
  - ruff
@@ -28,4 +32,10 @@ dependencies:
  - setuptools_scm
  - shapely
  - tqdm
- - triton
+ - wandb
+ - pip 
+ - pip:
+   # These must be installed in this order (see: https://docs.pytorch.org/TensorRT/getting_started/installation.html#installation)
+   - torch-tensorrt
+   - tensorrt
+   - nvidia-modelopt[all]

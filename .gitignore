@@ -114,3 +114,6 @@ models/
 
 # Viz
 visualizations/
+
+# configs not tracked
+config-*.yml

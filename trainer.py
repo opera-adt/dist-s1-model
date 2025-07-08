@@ -35,9 +35,9 @@ from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import DataLoader, random_split
 
 
-def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accelerator, train=True):
+def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accelerator, train_batch=True):
     """Perform one epoch of training by looping through the dataset once."""
-    if train:
+    if train_batch:
         model.train()
     else:
         model.eval()
@@ -50,7 +50,7 @@ def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accele
     num_batches = len(dataloader)
     batches_processed = 0
 
-    for batch_idx, (batch, target) in enumerate(dataloader):
+    for batch_idx, batch in enumerate(dataloader):
         # Check for interrupt signal
         if killer.kill_now:
             if accelerator.is_main_process:
@@ -63,30 +63,34 @@ def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accele
         # Get input size from config or use default
         input_size = getattr(run_epoch_tf, '_input_size', 16)
 
-        batch = batch.to(device)
-        target = target.to(device)
+        train_batch = batch['pre_imgs']
+        target_batch = batch['post_img']
+        # batch['acq_dts_float']
+
+        train_batch = train_batch.to(device)
+        target_batch = target_batch.to(device)
 
         # Data goes from Batch x Time X Channels X H x W -> (B h w) time channel ph pw, h = w = # of patches
-        batch = rearrange(batch, 'b t c (h ph) (w pw) -> (b h w) t c ph pw', ph=input_size, pw=input_size)
-        target = rearrange(target, 'b c (h ph) (w pw) -> (b h w) c ph pw', ph=input_size, pw=input_size)
+        train_batch = rearrange(train_batch, 'b t c (h ph) (w pw) -> (b h w) t c ph pw', ph=input_size, pw=input_size)
+        target_batch = rearrange(target_batch, 'b c (h ph) (w pw) -> (b h w) c ph pw', ph=input_size, pw=input_size)
 
-        target = torch.special.logit(target)
-        batch = torch.special.logit(batch)
+        # target_batch = torch.special.logit(target_batch)
+        # train_batch = torch.special.logit(train_batch)
 
-        mask_out_idx = random.randrange(batch.size(1))
-        batch = batch[:, mask_out_idx:, ...]
+        # mask_out_idx = random.randrange(train_batch.size(1))
+        # train_batch = train_batch[:, mask_out_idx:, ...]
 
         # Mark the random masking as a graph break to prevent compilation issues
-        torch._dynamo.graph_break()
+        # torch._dynamo.graph_break()
 
-        if train:
+        if train_batch.shape[0] > 0:
             # Clear cache to prevent memory accumulation
             if batch_idx % 50 == 0:  # Clear every 50 batches
                 torch.cuda.empty_cache()
 
-            pred_means, pred_logvars = model(batch)
-            loss = nll_gaussian(pred_means, pred_logvars, target, pi=pi)
-            mse_loss = F.mse_loss(pred_means, target)
+            pred_means, pred_logvars = model(train_batch)
+            loss = nll_gaussian(pred_means, pred_logvars, target_batch, pi=pi)
+            mse_loss = F.mse_loss(pred_means, target_batch)
 
             optimizer.zero_grad()
             accelerator.backward(loss)  # Use accelerator's backward
@@ -110,8 +114,8 @@ def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accele
                     torch.cuda.empty_cache()
 
                 # Compute baseline
-                pre_image_mean = torch.mean(batch, dim=1)
-                pre_image_var = torch.var(batch, dim=1, unbiased=False)
+                pre_image_mean = torch.mean(train_batch, dim=1)
+                pre_image_var = torch.var(train_batch, dim=1, unbiased=False)
 
                 # Add larger epsilon for numerical stability
                 eps = 1e-4  # Increased from 1e-8
@@ -128,13 +132,13 @@ def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accele
                         )
                     pre_image_var = torch.ones_like(pre_image_var) * 0.1  # Fallback to reasonable default
 
-                naive_nll_loss = nll_gaussian_stable(pre_image_mean, pre_image_var, target, pi)
-                naive_mse_loss = F.mse_loss(pre_image_mean, target)
+                naive_nll_loss = nll_gaussian_stable(pre_image_mean, pre_image_var, target_batch, pi)
+                naive_mse_loss = F.mse_loss(pre_image_mean, target_batch)
 
                 # Get prediction
-                pred_means, pred_logvars = model(batch)
-                loss = nll_gaussian(pred_means, pred_logvars, target)
-                mse_loss = F.mse_loss(pred_means, target)
+                pred_means, pred_logvars = model(train_batch)
+                loss = nll_gaussian(pred_means, pred_logvars, target_batch)
+                mse_loss = F.mse_loss(pred_means, target_batch)
 
                 # Gather losses from all processes for proper averaging
                 loss_gathered = accelerator.gather(loss.detach())
@@ -248,11 +252,11 @@ def main():
     train_dataset, test_dataset = random_split(dist_dataset, [train_size, test_size], generator=generator)
 
     train_loader = DataLoader(
-        dist_dataset, batch_size=config['train_config']['batch_size'], shuffle=True, collate_fn=custom_collate
+        train_dataset, batch_size=config['train_config']['batch_size'], shuffle=True, collate_fn=custom_collate_fn
     )
 
     test_loader = DataLoader(
-        dist_dataset, batch_size=config['train_config']['batch_size'], shuffle=True, collate_fn=custom_collate
+        test_dataset, batch_size=config['train_config']['batch_size'], shuffle=True, collate_fn=custom_collate_fn
     )
 
     # Debug dataset sizes
@@ -260,9 +264,6 @@ def main():
         print('Dataset sizes:')
         print(f'  - Train dataset: {len(train_dataset)} samples')
         print(f'  - Test dataset: {len(test_dataset)} samples')
-
-    train_loader = DataLoader(train_dataset, batch_size=config['train_config']['batch_size'], shuffle=True)
-    test_loader = DataLoader(test_dataset, batch_size=config['train_config']['batch_size'], shuffle=True)
 
     # Debug dataloader sizes before distributed setup
     if accelerator.is_main_process:
@@ -380,7 +381,7 @@ def main():
 
             # Train
             train_loss, train_mse, _, _ = run_epoch_tf(
-                train_loader, model, optimizer, accelerator.device, pi, epoch, killer, accelerator, train=True
+                train_loader, model, optimizer, accelerator.device, pi, epoch, killer, accelerator, train_batch=True
             )
 
             # Check again after training epoch
@@ -407,7 +408,7 @@ def main():
 
             # Test
             test_loss, test_mse, test_naive_nll, test_naive_mse = run_epoch_tf(
-                test_loader, model, optimizer, accelerator.device, pi, epoch, killer, accelerator, train=False
+                test_loader, model, optimizer, accelerator.device, pi, epoch, killer, accelerator, train_batch=False
             )
 
             # Update metrics history (only on main process to avoid duplication)

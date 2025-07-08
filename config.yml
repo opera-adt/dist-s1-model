@@ -25,7 +25,7 @@ model_config:
   nhead: 4
   num_encoder_layers: 4
   dim_feedforward: 768
-  max_seq_len: 10
+  max_seq_len: 21 # for new dataset
   dropout: 0.2
   activation: "relu"
 

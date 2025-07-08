@@ -32,7 +32,7 @@ Update the data paths in your configuration file (see Configuration section belo
 
 ### YAML Configuration File
 
-Create a configuration file (e.g., `config.yaml`) with the following structure:
+Create a configuration file (e.g., `config.yml`) with the following structure:
 
 ```yaml
 # Data configuration
@@ -100,7 +100,7 @@ Follow the prompts to configure:
 
 #### Option 2: Manual Configuration
 
-Create an Accelerate config file (`accelerate_config.yaml`):
+Create an Accelerate config file (`accelerate_config.yml`):
 
 ```yaml
 compute_environment: LOCAL_MACHINE
@@ -124,7 +124,7 @@ use_cpu: false
 ### Single GPU Training
 
 ```bash
-python train.py config.yaml
+python trainer.py config.yml
 ```
 
 ### Multi-GPU Training with Accelerate
@@ -132,19 +132,19 @@ python train.py config.yaml
 #### Using Default Accelerate Config
 
 ```bash
-accelerate launch train.py config.yaml
+accelerate launch trainer.py config.yml
 ```
 
 #### Using Custom Accelerate Config
 
 ```bash
-accelerate launch --config_file accelerate_config.yaml train.py config.yaml
+accelerate launch --config_file accelerate_config.yml train.py config.yml
 ```
 
 #### Direct Launch with Parameters
 
 ```bash
-accelerate launch --num_processes 2 train.py config.yaml
+accelerate launch --num_processes 2 train.py config.yml
 ```
 
 ### Advanced Training Options
@@ -155,7 +155,7 @@ If you encounter issues with PyTorch's dynamo compilation, you can disable it by
 
 ```bash
 export TORCH_COMPILE_DISABLE=1
-accelerate launch train.py config.yaml
+accelerate launch train.py config.yml
 ```
 
 #### Resume Training from Checkpoint
@@ -171,7 +171,7 @@ resume_checkpoint: "/path/to/checkpoint_epoch_X.pth"
 To capture training logs:
 
 ```bash
-accelerate launch train.py config.yaml > training.log 2> training.err
+accelerate launch train.py config.yml > training.log 2> training.err
 ```
 
 ## Monitoring and Validation
@@ -185,6 +185,11 @@ use_wandb: true
 wandb_project: "your-project-name"
 wandb_entity: "your-entity"
 ```
+
+### Wandb Setup
+
+Before using wandb for the first time, you must open a terminal session, activate the `dist-s1-model` env and run
+`wandb login`. The command line will prompt you for an API key that can be found at https://wandb.ai/home.
 
 ### Visual Validation
 

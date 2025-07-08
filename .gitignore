@@ -114,3 +114,6 @@ models/
 
 # Viz
 visualizations/
+
+# Test yml files
+config-*.yml

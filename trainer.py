@@ -10,6 +10,9 @@ from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import StepLR
 from accelerate import Accelerator
 from torch.utils.data import DataLoader
+from tqdm import tqdm
+from PIL import Image
+from torchvision.transforms import ToTensor
 from einops import rearrange
 
 # Core model and utilities
@@ -55,13 +58,12 @@ def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accele
         # Get input size from config or use default
         input_size = getattr(run_epoch_tf, '_input_size', 16)
         
-        # Data is already on the correct device via accelerator
-        # Keep the exact data loading logic as in original
-        batch = batch.unfold(3, input_size, input_size).unfold(4, input_size, input_size)
-        target = target.unfold(2, input_size, input_size).unfold(3, input_size, input_size)
+        batch = batch.to(device)
+        target = target.to(device)
 
-        batch = rearrange(batch, 'b t c h w ph pw -> (b h w) t c ph pw')
-        target = rearrange(target, 'b c h w ph pw -> (b h w) c ph pw')
+        #Data goes from Batch x Time X Channels X H x W -> (B h w) time channel ph pw, h = w = # of patches
+        batch = rearrange(batch, 'b t c (h ph) (w pw) -> (b h w) t c ph pw', ph=input_size, pw=input_size)
+        target = rearrange(target, 'b c (h ph) (w pw) -> (b h w) c ph pw', ph=input_size, pw=input_size)
 
         target = torch.special.logit(target)
         batch = torch.special.logit(batch)

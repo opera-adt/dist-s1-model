@@ -10,13 +10,13 @@ resume_checkpoint: null  # Path to checkpoint file to resume from
 
 # Data paths
 data:
-  data_path: "PytorchData/train_12813.pt"
+  data_dir_path: "../../dist-s1-data-updated/"  # path to directory with dataset_samples_npz and npz_samples
 
 # Model configuration
 model_config:
   type: "transformer"
   patch_size: 8
-  num_patches: 4  # (input_size_tf / patch_size) ** 2
+  input_size: 16
   data_dim: 128  # 2*patch_size*patch_size
   d_model: 256
   nhead: 4
@@ -24,7 +24,7 @@ model_config:
   dim_feedforward: 768
   max_seq_len: 21 # for new dataset
   dropout: 0.2
-  activation: "relu"
+  activation: "gelu"
 
 # Training configuration
 train_config:

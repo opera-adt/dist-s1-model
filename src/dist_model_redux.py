@@ -14,9 +14,9 @@ class SpatioTemporalTransformerRedux(nn.Module):
         self.max_seq_len = model_config['max_seq_len']
         self.dropout = model_config['dropout']
         self.activation = model_config['activation']
-
-        self.num_patches = model_config['num_patches']
+        self.input_size = model_config['input_size']
         self.patch_size = model_config['patch_size']
+        self.num_patches = (self.input_size / self.patch_size) ** 2
         self.data_dim = model_config['data_dim']
 
         self.embedding = nn.Linear(self.data_dim, self.d_model)

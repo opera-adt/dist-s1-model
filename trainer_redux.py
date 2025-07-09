@@ -80,7 +80,7 @@ def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accele
         # Mark the random masking as a graph break to prevent compilation issues
         # torch._dynamo.graph_break()
 
-        if train_batch:
+        if train_batch.shape[0] > 0:
             # Clear cache to prevent memory accumulation
             if batch_idx % 50 == 0:  # Clear every 50 batches
                 torch.cuda.empty_cache()
@@ -241,7 +241,7 @@ def main():
     np.random.seed(config['train_config']['seed'])
 
     # Load data
-    dist_dataset = DistS1Dataset(config['data']['data_path'])
+    dist_dataset = DistS1Dataset(config['data']['data_dir_path'])
     train_size = int(0.8 * len(dist_dataset))
     test_size = len(dist_dataset) - train_size
 
@@ -322,7 +322,7 @@ def main():
     input_size = config.get('train_config', {}).get('input_size', 16)
 
     # Store input_size for run_epoch_tf to access
-    run_epoch_tf._input_size = input_size
+    run_epoch_tf.input_size = input_size
 
     if accelerator.is_main_process:
         print(f'Using input_size: {input_size}')

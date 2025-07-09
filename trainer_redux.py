@@ -1,4 +1,3 @@
-import random
 import sys
 import time
 from datetime import datetime
@@ -20,12 +19,10 @@ from src.utils import (
     WandBManager,
     load_checkpoint,
     load_config,
-    # Validation utilities
     load_validation_data,
     nll_gaussian,
     nll_gaussian_stable,
     run_final_validation,
-    # Checkpoint utilities
     save_checkpoint,
     save_emergency_state,
     setup_warnings,

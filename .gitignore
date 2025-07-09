@@ -115,5 +115,5 @@ models/
 # Viz
 visualizations/
 
-# Test yml files
+# configs not tracked
 config-*.yml

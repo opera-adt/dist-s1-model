@@ -28,7 +28,17 @@ It is a greatly distilled version of Harris Hardiman-Mostow's research [reposito
 
 Update the data paths in your configuration file (see Configuration section below).
 
-## Configuration
+## Usage
+
+**Note:**
+
+We currently support two different datasets:
+
+1. sequential time-series to establish baselines and 
+2. another that uses windows around anniversary date from the target/post-image acquisition to establish a baseline. 
+
+The former is the original work that was done to prototype the algorithm and the latter is what OPERA project aims to support to be in line with the OPERA DIST suite. Currently all the `*-redux` or `Redux` are for the latter more recent dataset regarding windows around anniversary dates (.i.e. 2).
+We will support both for provenance, though our current focus will be on the newer dataset with the project's goal in mind.
 
 ### YAML Configuration File
 
@@ -125,6 +135,11 @@ use_cpu: false
 
 ```bash
 python trainer.py config.yml
+```
+or
+
+```bash
+python trainer_redux.py config_redux.yml
 ```
 
 ### Multi-GPU Training with Accelerate

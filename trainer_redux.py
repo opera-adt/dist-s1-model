@@ -68,6 +68,9 @@ def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accele
         train_batch = train_batch.to(device)
         target_batch = target_batch.to(device)
 
+        train_batch.clamp_(0, math.pi)
+        target_batch.clamp_(0, math.pi)
+
         # Data goes from Batch x Time X Channels X H x W -> (B h w) time channel ph pw, h = w = # of patches
         train_batch = rearrange(train_batch, 'b t c (h ph) (w pw) -> (b h w) t c ph pw', ph=input_size, pw=input_size)
         target_batch = rearrange(target_batch, 'b c (h ph) (w pw) -> (b h w) c ph pw', ph=input_size, pw=input_size)
@@ -191,10 +194,6 @@ def custom_collate_fn(batch, T_max=21):
     padded_pre_imgs, _ = left_pad_sequences(pre_imgs, T_max)
     # dts include the post-img date, so we add one to T_max
     padded_dts, _ = left_pad_sequences(dts, T_max + 1)
-
-    #Clip values to be in range [0, pi]
-    np.clip(padded_pre_imgs, 0, math.pi, out=padded_pre_imgs)
-    np.clip(post_img, 0, math.pi, out=post_img)
 
     return {
         'pre_imgs': torch.from_numpy(padded_pre_imgs),

@@ -154,6 +154,7 @@ def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accele
                 del pre_image_mean, pre_image_var, naive_nll_loss, naive_mse_loss
 
         batches_processed += 1
+       
 
     # Calculate averages based on processed batches
     if batches_processed > 0:
@@ -200,7 +201,7 @@ def custom_collate_fn(batch, T_max=21):
 
 def main():
     # Initialize accelerator first
-    accelerator = Accelerator()
+    accelerator = Accelerator(mixed_precision="fp16")
 
     # Setup warnings and debug info
     setup_warnings()

@@ -61,26 +61,18 @@ class SpatioTemporalTransformerRedux(nn.Module):
         return self._num_parameters
     
     def replace_nans(self, x):
-        """
-        Replace NaNs in input x with self.nan_token, broadcasted correctly.
-        - x: Tensor of shape (B, T, C, H, W) or (B, C, H, W)
-        """
-        nan_mask = torch.isnan(x)
-        if not nan_mask.any():
-            return x
+    """
+    Replace NaNs in input x with self.nan_token, broadcasted correctly.
+    - x: Tensor of shape (B, T, C, H, W) or (B, C, H, W)
+    """
+    if not torch.isnan(x).any():
+        return x
 
-        # Broadcast nan_token to match spatial dims
-        shape = x.shape
-        if x.ndim == 5:
-            # (B, T, C, H, W)
-            nan_token = self.nan_token.reshape(1, 1, -1, 1, 1)
-        elif x.ndim == 4:
-            # (B, C, H, W)
-            nan_token = self.nan_token.reshape(1, -1, 1, 1)
-        else:
-            raise ValueError("Unexpected input shape for NaN replacement")
+    # Compute the number of leading dimensions before C
+    leading_dims = x.ndim - 3
+    nan_token = self.nan_token.view(*([1] * leading_dims), -1, 1, 1)
 
-        return torch.where(nan_mask, nan_token, x)
+    return torch.where(torch.isnan(x), nan_token, x)
 
     def forward(self, img_baseline: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         batch_size, seq_len, channels, height, width = img_baseline.shape

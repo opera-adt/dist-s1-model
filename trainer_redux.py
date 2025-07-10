@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
+import math
 import torch
 import torch.nn.functional as F
 from accelerate import Accelerator
@@ -57,7 +58,7 @@ def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accele
         if batch_idx % 50 == 0 and accelerator.is_main_process:
             print(f'Batch {batch_idx}/{num_batches}')
 
-        # Get input size from config or use default
+        # Get input size and batch size from config or use default
         input_size = getattr(run_epoch_tf, '_input_size', 16)
 
         train_batch = batch['pre_imgs']
@@ -191,6 +192,12 @@ def custom_collate_fn(batch, T_max=21):
     # dts include the post-img date, so we add one to T_max
     padded_dts, _ = left_pad_sequences(dts, T_max + 1)
 
+    # Assuming pre_imgs shape: (B, T, C, H, W)
+    np.clip(padded_pre_imgs, 0, math.pi, out=padded_pre_imgs)
+
+    # Optionally clamp post_img too if needed:
+    np.clip(post_img, 0, math.pi, out=post_img)
+
     return {
         'pre_imgs': torch.from_numpy(padded_pre_imgs),
         'post_img': torch.from_numpy(post_img),
@@ -319,8 +326,8 @@ def main():
         start_epoch += 1
 
     # Get input_size from config or use default
-    input_size = config.get('train_config', {}).get('input_size', 16)
-
+    input_size = config['model_config']['input_size']
+    
     # Store input_size for run_epoch_tf to access
     run_epoch_tf.input_size = input_size
 

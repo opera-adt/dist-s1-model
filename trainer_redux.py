@@ -48,6 +48,7 @@ def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accele
     batches_processed = 0
 
     for batch_idx, batch in enumerate(dataloader):
+        start_time = time.time()
         # Check for interrupt signal
         if killer.kill_now:
             if accelerator.is_main_process:
@@ -64,8 +65,8 @@ def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accele
         target_batch = batch['post_img']
         # batch['acq_dts_float']
 
-        train_batch = train_batch.to(device)
-        target_batch = target_batch.to(device)
+        train_batch = train_batch.to(device, non_blocking=True)
+        target_batch = target_batch.to(device, non_blocking=True)
 
         # Data goes from Batch x Time X Channels X H x W -> (B h w) time channel ph pw, h = w = # of patches
         train_batch = rearrange(train_batch, 'b t c (h ph) (w pw) -> (b h w) t c ph pw', ph=input_size, pw=input_size)
@@ -154,6 +155,8 @@ def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accele
                 del pre_image_mean, pre_image_var, naive_nll_loss, naive_mse_loss
 
         batches_processed += 1
+        #print("batch time: ", round(time.time() - start_time, 3), " seconds")
+        #print("epoch time: ", num_batches * round(time.time() - start_time, 3) / 60 , " minutes")
 
     # Calculate averages based on processed batches
     if batches_processed > 0:
@@ -249,12 +252,27 @@ def main():
     train_dataset, test_dataset = random_split(dist_dataset, [train_size, test_size], generator=generator)
 
     train_loader = DataLoader(
-        train_dataset, batch_size=config['train_config']['batch_size'], shuffle=True, collate_fn=custom_collate_fn
+        train_dataset, batch_size=config['train_config']['batch_size'], shuffle=True, collate_fn=custom_collate_fn, pin_memory = True, 
+        num_workers = 6, persistent_workers=True,  prefetch_factor=4, multiprocessing_context='fork' 
     )
 
     test_loader = DataLoader(
-        test_dataset, batch_size=config['train_config']['batch_size'], shuffle=True, collate_fn=custom_collate_fn
+        test_dataset, batch_size=config['train_config']['batch_size'], shuffle=True, collate_fn=custom_collate_fn, pin_memory = True,
+        num_workers = 6, persistent_workers=True,  prefetch_factor=4, multiprocessing_context='fork' 
     )
+
+    data_iter = iter(train_loader)  # create an explicit iterator
+
+    for batch_idx in range(100):
+        start_time = time.time()
+        batch = next(data_iter)    # This blocks until the batch is loaded
+        end_time = time.time()
+
+        load_time = end_time - start_time
+        print(f"Batch {batch_idx} load time: {load_time:.4f} seconds")
+
+
+    
 
     # Debug dataset sizes
     if accelerator.is_main_process:

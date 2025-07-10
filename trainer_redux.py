@@ -58,7 +58,7 @@ def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accele
         if batch_idx % 50 == 0 and accelerator.is_main_process:
             print(f'Batch {batch_idx}/{num_batches}')
 
-        # Get input size and batch size from config or use default
+        # Get input size from config or use default
         input_size = getattr(run_epoch_tf, '_input_size', 16)
 
         train_batch = batch['pre_imgs']

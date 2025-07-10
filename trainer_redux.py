@@ -48,7 +48,6 @@ def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accele
     batches_processed = 0
 
     for batch_idx, batch in enumerate(dataloader):
-        start_time = time.time()
         # Check for interrupt signal
         if killer.kill_now:
             if accelerator.is_main_process:
@@ -155,8 +154,6 @@ def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accele
                 del pre_image_mean, pre_image_var, naive_nll_loss, naive_mse_loss
 
         batches_processed += 1
-        #print("batch time: ", round(time.time() - start_time, 3), " seconds")
-        #print("epoch time: ", num_batches * round(time.time() - start_time, 3) / 60 , " minutes")
 
     # Calculate averages based on processed batches
     if batches_processed > 0:
@@ -261,18 +258,6 @@ def main():
         num_workers = 6, persistent_workers=True,  prefetch_factor=4, multiprocessing_context='fork' 
     )
 
-    data_iter = iter(train_loader)  # create an explicit iterator
-
-    for batch_idx in range(100):
-        start_time = time.time()
-        batch = next(data_iter)    # This blocks until the batch is loaded
-        end_time = time.time()
-
-        load_time = end_time - start_time
-        print(f"Batch {batch_idx} load time: {load_time:.4f} seconds")
-
-
-    
 
     # Debug dataset sizes
     if accelerator.is_main_process:

@@ -192,10 +192,8 @@ def custom_collate_fn(batch, T_max=21):
     # dts include the post-img date, so we add one to T_max
     padded_dts, _ = left_pad_sequences(dts, T_max + 1)
 
-    # Assuming pre_imgs shape: (B, T, C, H, W)
+    #Clip values to be in range [0, pi]
     np.clip(padded_pre_imgs, 0, math.pi, out=padded_pre_imgs)
-
-    # Optionally clamp post_img too if needed:
     np.clip(post_img, 0, math.pi, out=post_img)
 
     return {

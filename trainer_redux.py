@@ -65,8 +65,8 @@ def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accele
         target_batch = batch['post_img']
         # batch['acq_dts_float']
 
-        train_batch = train_batch.to(device)
-        target_batch = target_batch.to(device)
+        train_batch = train_batch.to(device, non_blocking=True)
+        target_batch = target_batch.to(device, non_blocking=True)
 
         train_batch.clamp_(0, math.pi)
         target_batch.clamp_(0, math.pi)
@@ -158,6 +158,7 @@ def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accele
                 del pre_image_mean, pre_image_var, naive_nll_loss, naive_mse_loss
 
         batches_processed += 1
+       
 
     # Calculate averages based on processed batches
     if batches_processed > 0:
@@ -204,7 +205,7 @@ def custom_collate_fn(batch, T_max=21):
 
 def main():
     # Initialize accelerator first
-    accelerator = Accelerator()
+    accelerator = Accelerator(mixed_precision="fp16")
 
     # Setup warnings and debug info
     setup_warnings()
@@ -253,12 +254,15 @@ def main():
     train_dataset, test_dataset = random_split(dist_dataset, [train_size, test_size], generator=generator)
 
     train_loader = DataLoader(
-        train_dataset, batch_size=config['train_config']['batch_size'], shuffle=True, collate_fn=custom_collate_fn
+        train_dataset, batch_size=config['train_config']['batch_size'], shuffle=True, collate_fn=custom_collate_fn, pin_memory = True, 
+        num_workers = 6, persistent_workers=True,  prefetch_factor=4, multiprocessing_context='fork' 
     )
 
     test_loader = DataLoader(
-        test_dataset, batch_size=config['train_config']['batch_size'], shuffle=True, collate_fn=custom_collate_fn
+        test_dataset, batch_size=config['train_config']['batch_size'], shuffle=True, collate_fn=custom_collate_fn, pin_memory = True,
+        num_workers = 6, persistent_workers=True,  prefetch_factor=4, multiprocessing_context='fork' 
     )
+
 
     # Debug dataset sizes
     if accelerator.is_main_process:

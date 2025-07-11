@@ -16,8 +16,9 @@ class SpatioTemporalTransformerRedux(nn.Module):
         self.activation = model_config['activation']
         self.input_size = model_config['input_size']
         self.patch_size = model_config['patch_size']
-        self.num_patches = (self.input_size / self.patch_size) ** 2
+        self.num_patches = int((self.input_size / self.patch_size) ** 2)
         self.data_dim = model_config['data_dim']
+        self.nan_token = nn.Parameter(torch.randn(2)) ##nan_parameter to be learned, one for each channel
 
         self.embedding = nn.Linear(self.data_dim, self.d_model)
 
@@ -58,9 +59,26 @@ class SpatioTemporalTransformerRedux(nn.Module):
                 self._num_parameters += count
 
         return self._num_parameters
+    
+    def replace_nans(self, x):
+    """
+    Replace NaNs in input x with self.nan_token, broadcasted correctly.
+    - x: Tensor of shape (B, T, C, H, W) or (B, C, H, W)
+    """
+    if not torch.isnan(x).any():
+        return x
+
+    # Compute the number of leading dimensions before C
+    leading_dims = x.ndim - 3
+    nan_token = self.nan_token.view(*([1] * leading_dims), -1, 1, 1)
+
+    return torch.where(torch.isnan(x), nan_token, x)
 
     def forward(self, img_baseline: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         batch_size, seq_len, channels, height, width = img_baseline.shape
+
+        #Replace NaNs with learnable parameter
+        img_baseline = self.replace_nans(img_baseline)
 
         assert self.num_patches == (height * width) / (self.patch_size**2)
 

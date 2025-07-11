@@ -1,0 +1,66 @@
+# Training configuration for Spatiotemporal Transformer
+
+# WandB settings
+use_wandb: false
+wandb_entity: null  # Your organization/team name (e.g., "my-org" or "username")
+wandb_project: null
+wandb_run_name: null  # Will auto-generate if null
+resume_wandb_run_id: null  # Set to resume a specific wandb run
+
+# Resume training
+resume_checkpoint: null  # Path to checkpoint file to resume from
+
+# Data paths
+data:
+  train_path: "PytorchData/train_12813.pt"
+  test_path: "PytorchData/test_3204.pt"
+
+# Model configuration
+model_config:
+  type: "transformer"
+  patch_size: 8
+  num_patches: 4  # (input_size_tf / patch_size) ** 2
+  data_dim: 128  # 2*patch_size*patch_size
+  d_model: 128
+  nhead: 16
+  num_encoder_layers: 2
+  dim_feedforward: 384
+  max_seq_len: 10 # for new dataset
+  dropout: 0.2
+  activation: "relu"
+
+# Training configuration
+train_config:
+  batch_size: 20
+  num_epochs: 50
+  input_size: 16
+  learning_rate: 0.001  # 1e-4
+  seed: 177
+  step_size: 10  # For scheduler
+  gamma: 0.1  # For scheduler
+  checkpoint_freq: 25  # Save checkpoint every N epochs
+
+# Save directories
+save_dir:
+  models: "models"
+  checkpoints: "checkpoints"
+  visualizations: "visualizations"
+
+# Validation settings
+validation:
+  enable_visual_validation: true
+  
+  blend_mode: 'gaussian'
+  apply_smoothing: true      # Enable post-processing
+  smooth_sigma: 0.5         # Smoothing strength
+
+  landslide:
+    enabled: true
+    mask_path: "ValidationData/PNG_Landslide_Mask.tif"
+    data_path: "ValidationData/landslide_chip.pt"
+    stride: 16
+
+# Additional notes
+training_notes:
+  description: "Summer model, aurora data"
+  bursts: "all"

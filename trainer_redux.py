@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
+import math
 import torch
 import torch.nn.functional as F
 from accelerate import Accelerator
@@ -66,6 +67,9 @@ def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accele
 
         train_batch = train_batch.to(device)
         target_batch = target_batch.to(device)
+
+        train_batch.clamp_(0, math.pi)
+        target_batch.clamp_(0, math.pi)
 
         # Data goes from Batch x Time X Channels X H x W -> (B h w) time channel ph pw, h = w = # of patches
         train_batch = rearrange(train_batch, 'b t c (h ph) (w pw) -> (b h w) t c ph pw', ph=input_size, pw=input_size)
@@ -319,8 +323,8 @@ def main():
         start_epoch += 1
 
     # Get input_size from config or use default
-    input_size = config.get('train_config', {}).get('input_size', 16)
-
+    input_size = config['model_config']['input_size']
+    
     # Store input_size for run_epoch_tf to access
     run_epoch_tf.input_size = input_size
 

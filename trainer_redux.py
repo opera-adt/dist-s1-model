@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
+import math
 import torch
 import torch.nn.functional as F
 from accelerate import Accelerator
@@ -64,8 +65,11 @@ def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accele
         target_batch = batch['post_img']
         # batch['acq_dts_float']
 
-        train_batch = train_batch.to(device)
-        target_batch = target_batch.to(device)
+        train_batch = train_batch.to(device, non_blocking=True)
+        target_batch = target_batch.to(device, non_blocking=True)
+
+        train_batch.clamp_(0, math.pi)
+        target_batch.clamp_(0, math.pi)
 
         # Data goes from Batch x Time X Channels X H x W -> (B h w) time channel ph pw, h = w = # of patches
         train_batch = rearrange(train_batch, 'b t c (h ph) (w pw) -> (b h w) t c ph pw', ph=input_size, pw=input_size)
@@ -154,6 +158,7 @@ def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accele
                 del pre_image_mean, pre_image_var, naive_nll_loss, naive_mse_loss
 
         batches_processed += 1
+       
 
     # Calculate averages based on processed batches
     if batches_processed > 0:
@@ -200,7 +205,7 @@ def custom_collate_fn(batch, T_max=21):
 
 def main():
     # Initialize accelerator first
-    accelerator = Accelerator()
+    accelerator = Accelerator(mixed_precision="fp16")
 
     # Setup warnings and debug info
     setup_warnings()
@@ -249,12 +254,15 @@ def main():
     train_dataset, test_dataset = random_split(dist_dataset, [train_size, test_size], generator=generator)
 
     train_loader = DataLoader(
-        train_dataset, batch_size=config['train_config']['batch_size'], shuffle=True, collate_fn=custom_collate_fn
+        train_dataset, batch_size=config['train_config']['batch_size'], shuffle=True, collate_fn=custom_collate_fn, pin_memory = True, 
+        num_workers = 6, persistent_workers=True,  prefetch_factor=4, multiprocessing_context='fork' 
     )
 
     test_loader = DataLoader(
-        test_dataset, batch_size=config['train_config']['batch_size'], shuffle=True, collate_fn=custom_collate_fn
+        test_dataset, batch_size=config['train_config']['batch_size'], shuffle=True, collate_fn=custom_collate_fn, pin_memory = True,
+        num_workers = 6, persistent_workers=True,  prefetch_factor=4, multiprocessing_context='fork' 
     )
+
 
     # Debug dataset sizes
     if accelerator.is_main_process:
@@ -319,8 +327,8 @@ def main():
         start_epoch += 1
 
     # Get input_size from config or use default
-    input_size = config.get('train_config', {}).get('input_size', 16)
-
+    input_size = config['model_config']['input_size']
+    
     # Store input_size for run_epoch_tf to access
     run_epoch_tf.input_size = input_size
 

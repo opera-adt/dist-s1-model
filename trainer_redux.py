@@ -92,7 +92,7 @@ def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accele
             mask = ~torch.isnan(target_batch)  # True where value is NOT NaN
 
             pred_means, pred_logvars = model(train_batch)
-            loss = nll_gaussian(pred_means, pred_logvars, target_batch, pi=pi)
+            loss = nll_gaussian(pred_means, pred_logvars, target_batch, pi=pi, mask = mask)
             mse_loss = F.mse_loss(pred_means, target_batch)
 
             optimizer.zero_grad()

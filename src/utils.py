@@ -164,7 +164,7 @@ def nll_gaussian(mean, logvar, value, pi=None, mask=None):
     return loss
 
 
-def nll_gaussian_stable(mean, variance, value, pi=None):
+def nll_gaussian_stable(mean, variance, value, pi=None, mask = None):
     """
     Compute negative log-likelihood of Gaussian (numerically stable version).
     

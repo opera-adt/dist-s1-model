@@ -88,6 +88,8 @@ def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accele
             # Clear cache to prevent memory accumulation
             if batch_idx % 50 == 0:  # Clear every 50 batches
                 torch.cuda.empty_cache()
+            
+            mask = ~torch.isnan(target_batch)  # True where value is NOT NaN
 
             pred_means, pred_logvars = model(train_batch)
             loss = nll_gaussian(pred_means, pred_logvars, target_batch, pi=pi)
@@ -192,7 +194,7 @@ def custom_collate_fn(batch, T_max=21):
     post_img = np.stack([item['post_img'] for item in batch])
     dts = [item['acq_dts_float'] for item in batch]
 
-    padded_pre_imgs, _ = left_pad_sequences(pre_imgs, T_max)
+    padded_pre_imgs, _ = left_pad_sequences(pre_imgs, T_max, nodata_value=-9999)
     # dts include the post-img date, so we add one to T_max
     padded_dts, _ = left_pad_sequences(dts, T_max + 1)
 

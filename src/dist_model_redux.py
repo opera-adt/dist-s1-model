@@ -16,8 +16,11 @@ class SpatioTemporalTransformerRedux(nn.Module):
         self.activation = model_config['activation']
         self.input_size = model_config['input_size']
         self.patch_size = model_config['patch_size']
-        self.num_patches = (self.input_size / self.patch_size) ** 2
+        self.num_patches = int((self.input_size / self.patch_size) ** 2)
         self.data_dim = model_config['data_dim']
+        self.nan_token = nn.Parameter(torch.randn(2)) ##nan_parameter to be learned, one for each channel
+        self.pad_token = nn.Parameter(torch.randn(1, 2))  # shape: (1, C), parameter to be learned for padding
+
 
         self.embedding = nn.Linear(self.data_dim, self.d_model)
 
@@ -58,9 +61,33 @@ class SpatioTemporalTransformerRedux(nn.Module):
                 self._num_parameters += count
 
         return self._num_parameters
+    
+    def replace_special_tokens(self, x, pad_val=-9999.0):
+        """
+        Replace NaNs with self.nan_token and pad_val (e.g. -9999) with self.pad_token.
+        x: (B, T, C, H, W)
+        """
+        leading_dims = x.ndim - 3  # number of leading dims before C
+
+        # Replace NaNs
+        if torch.isnan(x).any():
+            nan_token = self.nan_token.view(*([1] * leading_dims), -1, 1, 1)
+            x = torch.where(torch.isnan(x), nan_token, x)
+
+        # Replace padding 
+        if (x == pad_val).any():
+            pad_token = self.pad_token.view(*([1] * leading_dims), -1, 1, 1)
+            mask = (x == pad_val)
+            x = torch.where(mask, pad_token, x)
+
+        return x
+
 
     def forward(self, img_baseline: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         batch_size, seq_len, channels, height, width = img_baseline.shape
+
+        #Replace NaNs with learnable parameter
+        img_baseline = self.replace_special_tokens(img_baseline)
 
         assert self.num_patches == (height * width) / (self.patch_size**2)
 

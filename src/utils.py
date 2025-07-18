@@ -132,7 +132,7 @@ def setup_warnings():
 # LOSS FUNCTIONS
 # =============================================================================
 
-def nll_gaussian(mean, logvar, value, pi=None):
+def nll_gaussian(mean, logvar, value, pi=None, mask=None):
     """
     Compute negative log-likelihood of Gaussian.
     
@@ -151,10 +151,20 @@ def nll_gaussian(mean, logvar, value, pi=None):
         pi = torch.FloatTensor([np.pi]).to(value.device)
     
     nll_element = (value - mean).pow(2) / torch.exp(logvar) + logvar + torch.log(2 * pi)
-    return torch.mean(0.5 * nll_element)
+
+    if mask is not None:
+        # Ensure mask dtype is float for multiplication
+        mask = mask.to(dtype=nll_element.dtype)
+        masked_nll = nll_element * mask
+        # Compute mean only over valid elements (avoid division by zero)
+        loss = 0.5 * masked_nll.sum() / mask.sum().clamp_min(1)
+    else:
+        loss = 0.5 * nll_element.mean()
+    
+    return loss
 
 
-def nll_gaussian_stable(mean, variance, value, pi=None):
+def nll_gaussian_stable(mean, variance, value, pi=None, mask = None):
     """
     Compute negative log-likelihood of Gaussian (numerically stable version).
     
@@ -174,7 +184,14 @@ def nll_gaussian_stable(mean, variance, value, pi=None):
     
     logvar = torch.log(variance)
     nll_element = (value - mean).pow(2) / variance + logvar + torch.log(2 * pi)
-    return torch.mean(0.5 * nll_element)
+
+    if mask is not None:
+        mask = mask.to(dtype=nll_element.dtype)
+        masked_nll = nll_element * mask
+        loss = 0.5 * masked_nll.sum() / mask.sum().clamp_min(1)
+    else:
+        loss = 0.5 * nll_element.mean()
+    return loss
 
 
 def spatial_smoothness_loss(logvar, weight=0.1):
@@ -921,7 +938,7 @@ def load_config(config_path):
     # Model config
     model_cfg = config['model_config']
     model_cfg['patch_size'] = int(model_cfg['patch_size'])
-    model_cfg['num_patches'] = int(model_cfg['num_patches'])
+    model_cfg['num_patches'] = int(model_cfg.get('num_patches', 0))
     model_cfg['data_dim'] = int(model_cfg['data_dim'])
     model_cfg['d_model'] = int(model_cfg['d_model'])
     model_cfg['nhead'] = int(model_cfg['nhead'])

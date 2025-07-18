@@ -79,7 +79,6 @@ class SpatioTemporalTransformerRedux(nn.Module):
             pad_token = self.pad_token.view(*([1] * leading_dims), -1, 1, 1)
             mask = (x == pad_val)
             x = torch.where(mask, pad_token, x)
-            print("padding ")
 
         return x
 

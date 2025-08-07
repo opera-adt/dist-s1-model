@@ -161,6 +161,7 @@ def nll_gaussian(mean, logvar, value, mask=None, pi=None):
     return loss
 
 
+
 def nll_gaussian_stable(mean, variance, value, mask=None, pi=None, eps=1e-6):
     """
     Numerically stable negative log-likelihood of Gaussian with masking,
@@ -192,8 +193,6 @@ def nll_gaussian_stable(mean, variance, value, mask=None, pi=None, eps=1e-6):
 
     logvar = torch.log(variance)
     nll_element = (value - mean).pow(2) / variance + logvar + torch.log(2 * pi)
-    loss = 0.5 * nll_element.mean()
-
     return loss
 
 def spatial_smoothness_loss(logvar, weight=0.1):
@@ -940,7 +939,7 @@ def load_config(config_path):
     # Model config
     model_cfg = config['model_config']
     model_cfg['patch_size'] = int(model_cfg['patch_size'])
-    model_cfg['num_patches'] = int(model_cfg['num_patches'])
+    model_cfg['num_patches'] = int(model_cfg.get('num_patches', 0))
     model_cfg['data_dim'] = int(model_cfg['data_dim'])
     model_cfg['d_model'] = int(model_cfg['d_model'])
     model_cfg['nhead'] = int(model_cfg['nhead'])

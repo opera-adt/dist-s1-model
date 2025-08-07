@@ -132,67 +132,68 @@ def setup_warnings():
 # LOSS FUNCTIONS
 # =============================================================================
 
-def nll_gaussian(mean, logvar, value, pi=None, mask=None):
+def nll_gaussian(mean, logvar, value, mask=None, pi=None):
     """
-    Compute negative log-likelihood of Gaussian.
-    
-    Args:
-        mean: Mean of the Gaussian distribution
-        logvar: Log variance of the Gaussian distribution
-        value: Target values
-        pi: Pre-computed pi tensor (optional)
-    
-    Returns:
-        Negative log-likelihood loss
+    Compute masked negative log-likelihood loss under a Gaussian.
+    mean, logvar, value: tensors of shape (...), same size
+    mask: bool tensor, True where valid data exists
     """
-    assert mean.size() == logvar.size() == value.size()
+    assert mean.shape == logvar.shape == value.shape
     
     if pi is None:
         pi = torch.FloatTensor([np.pi]).to(value.device)
-    
-    nll_element = (value - mean).pow(2) / torch.exp(logvar) + logvar + torch.log(2 * pi)
 
-    if mask is not None:
-        # Ensure mask dtype is float for multiplication
-        mask = mask.to(dtype=nll_element.dtype)
-        masked_nll = nll_element * mask
-        # Compute mean only over valid elements (avoid division by zero)
-        loss = 0.5 * masked_nll.sum() / mask.sum().clamp_min(1)
+    # Default mask: everything is valid
+    if mask is None:
+        mask = torch.ones_like(value, dtype=torch.bool)
     else:
-        loss = 0.5 * nll_element.mean()
-    
+        mask = mask.bool()  # Make sure it's boolean
+
+    # Only compute on valid entries
+    valid_mean = mean[mask]
+    valid_logvar = logvar[mask]
+    valid_value = value[mask]
+
+    # Compute NLL only on valid entries
+    nll_element = ((valid_value - valid_mean) ** 2) / torch.exp(valid_logvar) + valid_logvar + torch.log(2 * pi)
+    loss = 0.5 * nll_element.mean()
+
     return loss
 
 
-def nll_gaussian_stable(mean, variance, value, pi=None, mask = None):
+
+def nll_gaussian_stable(mean, variance, value, mask=None, pi=None, eps=1e-6):
     """
-    Compute negative log-likelihood of Gaussian (numerically stable version).
+    Numerically stable negative log-likelihood of Gaussian with masking,
+    avoiding any computation at invalid (masked out) positions.
     
     Args:
-        mean: Mean of the Gaussian distribution
-        variance: Variance of the Gaussian distribution
-        value: Target values
-        pi: Pre-computed pi tensor (optional)
-    
+        mean: Mean tensor
+        variance: Variance tensor (must be > 0)
+        value: Target tensor
+        mask: Boolean tensor, True where data is valid
+        pi: Optional precomputed pi tensor
+        eps: Small epsilon to stabilize log/variance
     Returns:
-        Negative log-likelihood loss
+        Scalar loss: average NLL over valid entries
     """
     assert mean.size() == variance.size() == value.size()
-    
+
     if pi is None:
         pi = torch.FloatTensor([np.pi]).to(value.device)
-    
-    logvar = torch.log(variance)
-    nll_element = (value - mean).pow(2) / variance + logvar + torch.log(2 * pi)
 
     if mask is not None:
-        mask = mask.to(dtype=nll_element.dtype)
-        masked_nll = nll_element * mask
-        loss = 0.5 * masked_nll.sum() / mask.sum().clamp_min(1)
+        # Mask out all tensors before computation
+        mask = mask.to(dtype=torch.bool)
+        mean = mean[mask]
+        variance = variance[mask].clamp(min=eps)
+        value = value[mask]
     else:
-        loss = 0.5 * nll_element.mean()
-    return loss
+        variance = variance.clamp(min=eps)
 
+    logvar = torch.log(variance)
+    nll_element = (value - mean).pow(2) / variance + logvar + torch.log(2 * pi)
+    return loss
 
 def spatial_smoothness_loss(logvar, weight=0.1):
     """Penalize large differences between neighboring pixels"""

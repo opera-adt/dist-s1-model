@@ -12,8 +12,8 @@ resume_checkpoint: null  # Path to checkpoint file to resume from
 
 # Data paths
 data:
-  train_path: "PytorchData/train_12813.pt"
-  test_path: "PytorchData/test_3204.pt"
+  train_path: "opera-dist-ml/data/v1/"
+  test_path: "opera-dist-ml/data/v1/"
 
 # Model configuration
 model_config:
@@ -22,10 +22,10 @@ model_config:
   num_patches: 16  # (input_size_tf / patch_size) ** 2
   data_dim: 32  # 2*patch_size*patch_size
   d_model: 128
-  nhead: 4
+  nhead: 8
   num_encoder_layers: 2
-  dim_feedforward: 192
-  max_seq_len: 20 # for new dataset
+  dim_feedforward: 384
+  max_seq_len: 30
   dropout: 0.2
   activation: "relu"
 

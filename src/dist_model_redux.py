@@ -64,21 +64,22 @@ class SpatioTemporalTransformerRedux(nn.Module):
     
     def replace_special_tokens(self, x, pad_val=-9999.0):
         """
-        Replace NaNs with self.nan_token and pad_val (e.g. -9999) with self.pad_token.
-        x: (B, T, C, H, W)
+        Replace NaNs with self.nan_token and pad_val with self.pad_token.
+        x: tensor of shape (B, T, C, H, W)
         """
-        leading_dims = x.ndim - 3  # number of leading dims before C
+        leading_dims = x.ndim - 3  # dims before C
+
+        # Broadcast tokens for replacement
+        nan_token = self.nan_token.view(*([1] * leading_dims), -1, 1, 1)
+        pad_token = self.pad_token.view(*([1] * leading_dims), -1, 1, 1)
 
         # Replace NaNs
         if torch.isnan(x).any():
-            nan_token = self.nan_token.view(*([1] * leading_dims), -1, 1, 1)
             x = torch.where(torch.isnan(x), nan_token, x)
 
-        # Replace padding 
+        # Replace pad_val
         if (x == pad_val).any():
-            pad_token = self.pad_token.view(*([1] * leading_dims), -1, 1, 1)
-            mask = (x == pad_val)
-            x = torch.where(mask, pad_token, x)
+            x = torch.where(x == pad_val, pad_token, x)
 
         return x
 
@@ -91,9 +92,30 @@ class SpatioTemporalTransformerRedux(nn.Module):
 
         assert self.num_patches == (height * width) / (self.patch_size**2)
 
+        # Create padding mask BEFORE reshaping to patches
+        # pad_token shape: (1, C), expand to (1, 1, C, 1, 1) to broadcast to (B, T, C, H, W)
+        pad_token = self.pad_token.view(1, 1, channels, 1, 1)
+
+        # Boolean mask where pixels equal pad token (per channel)
+        is_pad_pixel = torch.isclose(img_baseline, pad_token, atol=1e-6)
+
+        # For each time step, check if ALL pixels and channels are equal to pad token
+        # Result: (B, T) True means the whole time step is padded
+        padding_mask = is_pad_pixel.all(dim=[2, 3, 4])
+
         img_baseline = einops.rearrange(
             img_baseline, 'b t c (h ph) (w pw) -> b t (h w) (c ph pw)', ph=self.patch_size, pw=self.patch_size
         )  # batch, seq_len, num_patches, data_dim
+            # Create padding mask (B, T)
+        # Compare patches to pad_token and check if all patches in time step equal pad_token
+        # self.pad_token shape: (1, C) or (1, data_dim) — adjust shape if needed
+       # pad_token = self.pad_token.view(1, 1, 1, -1)  # broadcastable shape (1,1,1,data_dim)
+        
+        # Check equality for each patch vector: boolean tensor (B, T, num_patches, data_dim)
+        #is_pad_patch = torch.isclose(img_baseline, pad_token, atol=1e-6).all(dim=-1)  # all dims of data_dim match
+        
+        # For each time step, check if **all** patches are padding patches:
+       # padding_mask = is_pad_patch.all(dim=-1)  # shape (B, T), True means entire time step padded
 
         img_baseline = (
             self.embedding(img_baseline)
@@ -108,7 +130,12 @@ class SpatioTemporalTransformerRedux(nn.Module):
             batch_size, seq_len * self.num_patches, self.d_model
         )  # transformer expects (batch_size, sequence, dmodel)
 
-        output = self.transformer_encoder(img_baseline)
+        # expanded_mask = padding_mask.unsqueeze(-1).expand(-1, -1, self.num_patches).flatten(1)  # (B, T*num_patches)
+
+        # Expand padding mask (B, T) -> (B, T * num_patches)
+        expanded_mask = padding_mask.unsqueeze(-1).expand(-1, -1, self.num_patches).flatten(1)
+
+        output = self.transformer_encoder(img_baseline, src_key_padding_mask=expanded_mask)
 
         mean = self.mean_out(output)  # batchsize, seq_len*num_patches, data_dim
         logvar = self.logvar_out(output)  # batchsize, seq_len*num_patches, 2*data_dim

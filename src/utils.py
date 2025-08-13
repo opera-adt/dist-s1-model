@@ -19,6 +19,9 @@ from datetime import datetime
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import matplotlib.cm as cm
+import matplotlib.colors as colors
+import datetime
 import numpy as np
 import torch
 import torch.mps
@@ -30,6 +33,7 @@ from scipy.ndimage import gaussian_filter
 from scipy.special import logit
 from torchvision.transforms import ToTensor
 from tqdm.auto import tqdm
+from einops import rearrange
 
 # Optional imports
 try:
@@ -1311,3 +1315,125 @@ def run_final_validation(model, val_data, epoch, config, wandb_manager, accelera
             print("Visual validation completed!")
     elif accelerator.is_main_process and config.get('validation', {}).get('enable_visual_validation', False):
         print("\nSkipping visual validation - no validation data loaded")
+
+def show_prediction_vs_groundtruth_wandb(pred, truth, idx, acq_dt_float=None, pad_val=-9999.0, wandb_run=None):
+    """
+    Show predicted vs actual image side-by-side for a single sample.
+    Logs the figure directly to wandb. Does NOT save or show the figure.
+    
+    Args:
+        pred: Tensor (C, H, W)
+        truth: Tensor (C, H, W)
+        idx: Sample index (for labeling)
+        acq_dt_float: Optional acquisition date float for caption
+        pad_val: Padding value to exclude for vmin/vmax
+        wandb_run: wandb run instance (if None, uses wandb.run)
+    """
+
+    if wandb_run is None:
+        import wandb
+        wandb_run = wandb.run
+        if wandb_run is None:
+            print("Warning: No active wandb run detected. Logging skipped.")
+            return
+
+    pred = pred.cpu().numpy()
+    truth = truth.cpu().numpy()
+    num_channels = pred.shape[0]
+
+    # Compute vmin/vmax per channel excluding pad_val
+    vmin_list, vmax_list = [], []
+    for c in range(num_channels):
+        ch_data = np.concatenate([pred[c].flatten(), truth[c].flatten()])
+        ch_data = ch_data[ch_data != pad_val]
+        ch_data = ch_data[~np.isnan(ch_data)]
+        vmin_list.append(np.percentile(ch_data, 2))
+        vmax_list.append(np.percentile(ch_data, 98))
+
+    # Build date string if provided
+    date_str = ""
+    if acq_dt_float is not None:
+        base_date = datetime.datetime(2014, 1, 1)
+        if acq_dt_float == pad_val:
+            date_str = "padding"
+        else:
+            date = base_date + datetime.timedelta(days=float(acq_dt_float) * 365.25)
+            date_str = date.strftime("%Y-%m-%d")
+
+    # Figure size scales with channels
+    fig_width = 5 * num_channels + 2
+    fig, axes = plt.subplots(
+        2, num_channels, figsize=(fig_width, 6),
+        gridspec_kw={'width_ratios': [1] * num_channels, 'wspace': 0.3}
+    )
+    if num_channels == 1:
+        axes = np.expand_dims(axes, axis=1)
+
+    # Plot predicted and ground truth with colorbars
+    for c in range(num_channels):
+        axes[0, c].imshow(pred[c], cmap="viridis",
+                          vmin=vmin_list[c], vmax=vmax_list[c])
+        axes[0, c].set_title(f"Predicted - Channel {c}\n{date_str}", fontsize=9)
+        axes[0, c].axis("off")
+
+        axes[1, c].imshow(truth[c], cmap="viridis",
+                          vmin=vmin_list[c], vmax=vmax_list[c])
+        axes[1, c].set_title(f"Ground Truth - Channel {c}\n{date_str}", fontsize=9)
+        axes[1, c].axis("off")
+
+        # Evenly space colorbars
+        total_cbar_width = 0.15  # fraction of figure width reserved for all colorbars
+        start = 0.88
+        step = total_cbar_width / max(num_channels, 1)
+        left_pos = start + step * c
+        cbar_ax = fig.add_axes([left_pos, 0.15, 0.02, 0.7])  # [left, bottom, width, height]
+
+        norm = colors.Normalize(vmin=vmin_list[c], vmax=vmax_list[c])
+        sm = cm.ScalarMappable(cmap="viridis", norm=norm)
+        cbar = fig.colorbar(sm, cax=cbar_ax)
+        cbar.set_label(f"Channel {c} Pixel Value")
+
+    # Log to wandb (no save or show)
+    wandb_run.log({f"prediction_vs_groundtruth/sample_{idx}": wandb.Image(fig)})
+    plt.close(fig)
+
+def get_test_batch(test_loader, model, device):
+    # Get a random batch from test_loader
+    # ----------------------------
+    with torch.no_grad():
+        for batch in test_loader:
+            #input_size = getattr(model, "patch_size", 16)  # fallback to 16 if not found
+            input_size = 16
+
+            train_batch = batch["pre_imgs"].to(device, non_blocking=True)  # (B, T, C, H, W)
+            target_batch = batch["post_img"].to(device, non_blocking=True)  # (B, C, H, W)
+            acq_dts_float = batch["acq_dts_float"].to(device, non_blocking=True).float()  # (B, T+1)
+
+            # Clamp values as in training
+            train_batch.clamp_(0, math.pi)
+            target_batch.clamp_(0, math.pi)
+
+            # Cut acq_dts_float to match input length
+            acq_dts_input = acq_dts_float[:, :-1]  # (B, T)
+
+            B, T, C, H, W = train_batch.shape
+            P = (H // input_size) * (W // input_size)
+
+            # Rearrange train_batch and target_batch like in training
+            train_batch = rearrange(train_batch, 'b t c (h ph) (w pw) -> (b h w) t c ph pw', ph=input_size, pw=input_size)
+            target_batch = rearrange(target_batch, 'b c (h ph) (w pw) -> (b h w) c ph pw', ph=input_size, pw=input_size)
+
+            print(train_batch.shape)
+
+            # Expand acq_dts_input across patches
+            acq_dts_input = acq_dts_input.unsqueeze(1).repeat(1, P, 1).view(B * P, T)
+
+            # Forward pass
+            pred_mean, pred_log_var = model(train_batch, acq_dts_input)
+
+            # Reshape prediction back to (B, C, H, W)
+            pred_mean = rearrange(pred_mean, '(b h w) c ph pw -> b c (h ph) (w pw)', b=B, h=H // input_size, w=W // input_size, ph=input_size, pw=input_size)
+            pred_log_var = rearrange(pred_log_var, '(b h w) c ph pw -> b c (h ph) (w pw)', b=B, h=H // input_size, w=W // input_size, ph=input_size, pw=input_size)
+            target_batch = rearrange(target_batch, '(b h w) c ph pw -> b c (h ph) (w pw)', b=B, h=H // input_size, w=W // input_size, ph=input_size, pw=input_size)
+            break  # just one batch
+    return pred_mean, pred_log_var, target_batch

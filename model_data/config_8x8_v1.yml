@@ -12,8 +12,8 @@ resume_checkpoint: null  # Path to checkpoint file to resume from
 
 # Data paths
 data:
-  train_path: "PytorchData/train_12813.pt"
-  test_path: "PytorchData/test_3204.pt"
+  train_path: "opera-dist-ml/data/v1/"
+  test_path: "opera-dist-ml/data/v1/"
 
 # Model configuration
 model_config:

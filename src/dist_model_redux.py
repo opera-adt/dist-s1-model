@@ -2,6 +2,34 @@ import einops
 import torch
 import torch.nn as nn
 
+class TransformerEncoderWithMask(nn.TransformerEncoder):
+    """
+    Drop-in replacement for nn.TransformerEncoder that supports per-batch attn_mask.
+    """
+    def forward(self, src, attn_mask=None, src_key_padding_mask=None):
+        # src: (B, L, d_model)
+        output = src
+
+        for mod in self.layers:
+            # nn.TransformerEncoderLayer doesn't accept per-batch attn_mask,
+            # so we drop down into its self_attn directly.
+            src2, _ = mod.self_attn(
+                output, output, output,
+                attn_mask=attn_mask,  # we will build per-batch attn_mask
+                key_padding_mask=src_key_padding_mask,
+                need_weights=False
+            )
+            output = output + mod.dropout1(src2)
+            output = mod.norm1(output)
+            src2 = mod.linear2(mod.dropout(mod.activation(mod.linear1(output))))
+            output = output + mod.dropout2(src2)
+            output = mod.norm2(output)
+
+        if self.norm is not None:
+            output = self.norm(output)
+
+        return output
+
 
 class SpatioTemporalTransformerRedux(nn.Module):
     def __init__(self, model_config: dict) -> None:
@@ -36,7 +64,7 @@ class SpatioTemporalTransformerRedux(nn.Module):
             batch_first=True,
         )
 
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, self.num_encoder_layers)
+        self.transformer_encoder = nn.TransformerEncoderWithMask(encoder_layer, self.num_encoder_layers)
 
         self.mean_out = nn.Sequential(
             nn.Linear(self.d_model, self.dim_feedforward),  # reuse dim feedforward here
@@ -88,6 +116,8 @@ class SpatioTemporalTransformerRedux(nn.Module):
         batch_size, seq_len, channels, height, width = img_baseline.shape
 
         padding_mask = (img_baseline == -9999.0).all(dim=(2, 3, 4))
+        nan_mask = torch.isnan(img_baseline)
+
         img_baseline = self.replace_special_tokens(img_baseline)
 
         #Replace NaNs with learnable parameter
@@ -95,17 +125,20 @@ class SpatioTemporalTransformerRedux(nn.Module):
 
         assert self.num_patches == (height * width) / (self.patch_size**2)
 
-        # Check a few padded timesteps for correctness
-        # for b in range(batch_size):
-        #     for t in range(seq_len):
-        #         if padding_mask[b, t]:
-        #             print(f"[DEBUG] Batch {b}, timestep {t} detected as padded.")
-        #             print(f"Unique pixel values: {torch.unique(img_baseline[b, t]).tolist()}")
-        #             print(f"Pad token: {self.pad_token.view(-1).tolist()}")
-
         img_baseline = einops.rearrange(
             img_baseline, 'b t c (h ph) (w pw) -> b t (h w) (c ph pw)', ph=self.patch_size, pw=self.patch_size
         )  # batch, seq_len, num_patches, data_dim
+
+        nan_mask = einops.rearrange(
+            nan_mask,
+            'b t c (h ph) (w pw) -> b t (h w) (c ph pw)',
+            ph=self.patch_size, pw=self.patch_size
+        )  # (B, T, num_patches, patch_dim)
+
+        patch_nan_mask = nan_mask.all(dim=-1)  # (B, T, num_patches)
+
+        seq_nan_mask = patch_nan_mask.reshape(batch_size, seq_len * self.num_patches)  # (B, L)
+
 
 
         img_baseline = (
@@ -124,8 +157,31 @@ class SpatioTemporalTransformerRedux(nn.Module):
         # Expand mask to patch-level sequence: (B, T) -> (B, T, P) -> (B, T*P) ---
         expanded_mask = padding_mask.unsqueeze(-1).expand(-1, -1, self.num_patches).reshape(batch_size, seq_len * self.num_patches)  # bool
 
-        output = self.transformer_encoder(img_baseline, src_key_padding_mask=expanded_mask)
+        ##Build new attention mask:
+        attn_mask = []
+        for b in range(batch_size):
+            row_mask = torch.zeros(L, L, device=img_baseline.device)
 
+            # Block queries from NaN tokens (one-way masking)
+            nan_indices = seq_nan_mask[b].nonzero(as_tuple=False).squeeze(-1)
+            row_mask[nan_indices, :] = float("-inf")
+
+            # Block queries+keys from padding tokens (symmetric masking)
+            pad_indices = expanded_mask[b].nonzero(as_tuple=False).squeeze(-1)
+            row_mask[pad_indices, :] = float("-inf")
+            row_mask[:, pad_indices] = float("-inf")
+
+            attn_mask.append(row_mask)
+
+        attn_mask = torch.stack(attn_mask)  # (B, L, L)
+
+
+        output = self.transformer_encoder(
+            img_baseline, 
+            attn_mask=attn_mask, 
+            src_key_padding_mask=None  # not needed, handled inside attn_mask
+        )
+        
         mean = self.mean_out(output)  # batchsize, seq_len*num_patches, data_dim
         logvar = self.logvar_out(output)  # batchsize, seq_len*num_patches, 2*data_dim
 

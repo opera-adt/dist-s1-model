@@ -64,7 +64,7 @@ class SpatioTemporalTransformerRedux(nn.Module):
             batch_first=True,
         )
 
-        self.transformer_encoder = nn.TransformerEncoderWithMask(encoder_layer, self.num_encoder_layers)
+        self.transformer_encoder = TransformerEncoderWithMask(encoder_layer, self.num_encoder_layers)
 
         self.mean_out = nn.Sequential(
             nn.Linear(self.d_model, self.dim_feedforward),  # reuse dim feedforward here

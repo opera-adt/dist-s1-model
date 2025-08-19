@@ -12,6 +12,7 @@ from accelerate import Accelerator
 from einops import rearrange
 from torch.utils.data import Subset, random_split
 
+import random
 
 # Dataset loader
 from src.dataset import DistS1Dataset
@@ -493,7 +494,7 @@ def main():
 
             # Save checkpoint (only from main process)
             if epoch % config['train_config']['checkpoint_freq'] == 0:
-                checkpoint_path = Path(config['save_dir']['checkpoints']) / f'checkpoint_epoch_{epoch}_{now}_nan_param_pad_param.pth'
+                checkpoint_path = Path(config['save_dir']['checkpoints']) / f'checkpoint_epoch_{epoch}_{now}_nan_param_masked_pad_param.pth'
                 save_checkpoint(
                     model, optimizer, scheduler, epoch, config, metrics_history, checkpoint_path, accelerator
                 )
@@ -501,7 +502,7 @@ def main():
                 # Save model (only from main process)
                 if accelerator.is_main_process:
                     model_path = (
-                        Path(config['save_dir']['models']) / f'{config["model_config"]["type"]}_{now}_epoch_{epoch}_nan_param_pad_param.pth'
+                        Path(config['save_dir']['models']) / f'{config["model_config"]["type"]}_{now}_epoch_{epoch}_nan_param_masked_pad_param.pth'
                     )
                     torch.save(accelerator.get_state_dict(model), model_path)
 
@@ -553,7 +554,7 @@ def main():
         # Save final checkpoint only if training completed normally (only from main process)
         if not killer.kill_now and 'epoch' in locals() and epoch == config['train_config']['num_epochs']:
             if accelerator.is_main_process:
-                final_checkpoint_path = Path(config['save_dir']['checkpoints']) / f'final_checkpoint_{now}_nan_param_pad_param.pth'
+                final_checkpoint_path = Path(config['save_dir']['checkpoints']) / f'final_checkpoint_{now}_nan_param_masked_pad_param.pth'
                 save_checkpoint(
                     model, optimizer, scheduler, epoch, config, metrics_history, final_checkpoint_path, accelerator
                 )

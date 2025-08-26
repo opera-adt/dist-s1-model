@@ -43,8 +43,8 @@ Currently all the `*-redux` or `Redux` are for 3.
 
 ### Downloading data
 
-1. `v0` can be downloaded from this public `s3` bucket: `opera-dist-s1-training-data/v0` (~60 GB)
-2. `v1` can be downloaded from this public `s3` bucket: `opera-dist-s1-training-data/v1` (~75 GB)
+1. `v0` can be downloaded from this public `s3` bucket: `s3://opera-dist-s1-training-data/v0` (~60 GB)
+2. `v1` can be downloaded from this public `s3` bucket: `s3://opera-dist-s1-training-data/v1` (~75 GB)
 3. `v2` can be generated from this repository (note it is approximately 27 TB): https://github.com/opera-adt/dist-s1-training-data
 
 ### YAML Configuration File

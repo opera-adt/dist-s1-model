@@ -266,13 +266,11 @@ A separate repository for SAR data curation is planned. This is currently a work
 
 - Hardiman-Mostow, Harris, Charles Marshak, and Alexander L. Handwerger. "Deep Self-Supervised Disturbance Mapping with the OPERA Sentinel-1 Radiometric Terrain Corrected SAR Backscatter Product." IEEE Journal of Selected Topics in Applied Earth Observations and Remote Sensing (2025). [arXiv](https://arxiv.org/abs/2501.09129)
 
-## License
-
-[Add your license information here]
 
 ## Contributing
 
-[Add contributing guidelines here]
+This is an open-source research repository to provide provenance of the models used to measure disturbance.
+Please open up an issue and we can work together to fix bugs.
 
 ## Support
 

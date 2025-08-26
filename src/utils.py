@@ -165,6 +165,7 @@ def nll_gaussian(mean, logvar, value, mask=None, pi=None):
     return loss
 
 
+
 def nll_gaussian_stable(mean, variance, value, mask=None, pi=None, eps=1e-6):
     """
     Numerically stable negative log-likelihood of Gaussian with masking,
@@ -196,8 +197,8 @@ def nll_gaussian_stable(mean, variance, value, mask=None, pi=None, eps=1e-6):
 
     logvar = torch.log(variance)
     nll_element = (value - mean).pow(2) / variance + logvar + torch.log(2 * pi)
+    
     loss = 0.5 * nll_element.mean()
-
     return loss
 
 def spatial_smoothness_loss(logvar, weight=0.1):

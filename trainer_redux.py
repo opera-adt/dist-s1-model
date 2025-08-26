@@ -98,12 +98,15 @@ def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accele
             mask = ~torch.isnan(target_batch)  # True where value is NOT NaN
 
             pred_means, pred_logvars = model(train_batch)
-            loss = nll_gaussian(pred_means, pred_logvars, target_batch, pi=pi, mask = mask)
+
+            pred_means, pred_logvars = model(train_batch)
+
+            loss = nll_gaussian(pred_means, pred_logvars, target_batch, mask=mask, pi = pi)
             mse_loss = F.mse_loss(pred_means, target_batch)
 
             optimizer.zero_grad()
             accelerator.backward(loss)  # Use accelerator's backward
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 10)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
 
             # Gather losses from all processes for proper averaging
@@ -146,7 +149,8 @@ def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accele
 
                 # Get prediction
                 pred_means, pred_logvars = model(train_batch)
-                loss = nll_gaussian(pred_means, pred_logvars, target_batch)
+                mask = ~torch.isnan(target_batch)
+                loss = nll_gaussian(pred_means, pred_logvars, target_batch, mask = mask)
                 mse_loss = F.mse_loss(pred_means, target_batch)
 
                 # Gather losses from all processes for proper averaging
@@ -506,26 +510,32 @@ def main():
                     )
                     torch.save(accelerator.get_state_dict(model), model_path)
 
-                    # --- New: Visualize and log 5 random test images ---
-                pred_mean, pred_log_var, target_batch = get_test_batch(test_loader, model, accelerator.device)
+                    #Visualize and log 10 random test images ---
+                pred_mean, pred_log_var, target_batch, pre_imgs, acq_dts_float = get_test_batch(
+                    test_loader, model, accelerator.device
+                )
 
                 batch_size = pred_mean.shape[0]
-                sample_indices = random.sample(range(batch_size), min(5, batch_size))
+                sample_indices = random.sample(range(batch_size), min(10, batch_size))
 
                 for idx in sample_indices:
                     # Pick predicted and ground truth for sample idx
-                    pred = pred_mean[idx]
-                    truth = target_batch[idx]
+                        pred = pred_mean[idx]
+                        pred_logvar = pred_log_var[idx]
+                        truth = target_batch[idx]
+                        pre_img_seq = pre_imgs[idx]  # (T, C, H, W)
+                        acq_seq = acq_dts_float[idx]  # (T+1,)
 
-                    ##TODO: Add date info to acquisition visuals
-                    show_prediction_vs_groundtruth_wandb(
-                        pred=pred,
-                        truth=truth,
-                        idx=idx,
-                        acq_dt_float=None,  # Or pass actual date if you extend get_test_batch to return it
-                        pad_val=-9999.0,
-                        wandb_run=wandb_manager  # uses current active run automatically
-                    )
+                        show_prediction_vs_groundtruth_wandb(
+                            pred=pred,
+                            log_var=pred_logvar,
+                            truth=truth,
+                            pre_imgs=pre_img_seq,         # <--- now available for plotting
+                            idx=idx,
+                            acq_dt_float=None,         # you can pass sequence of times too
+                            pad_val=-9999.0,
+                            wandb_manager=wandb_manager,
+                        )
 
             scheduler.step()
 

@@ -15,7 +15,7 @@ import platform
 import signal
 import warnings
 from collections.abc import Generator
-from datetime import datetime
+import datetime
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -136,67 +136,69 @@ def setup_warnings():
 # LOSS FUNCTIONS
 # =============================================================================
 
-def nll_gaussian(mean, logvar, value, pi=None, mask=None):
+def nll_gaussian(mean, logvar, value, mask=None, pi=None):
     """
-    Compute negative log-likelihood of Gaussian.
-    
-    Args:
-        mean: Mean of the Gaussian distribution
-        logvar: Log variance of the Gaussian distribution
-        value: Target values
-        pi: Pre-computed pi tensor (optional)
-    
-    Returns:
-        Negative log-likelihood loss
+    Compute masked negative log-likelihood loss under a Gaussian.
+    mean, logvar, value: tensors of shape (...), same size
+    mask: bool tensor, True where valid data exists
     """
-    assert mean.size() == logvar.size() == value.size()
+    assert mean.shape == logvar.shape == value.shape
     
     if pi is None:
         pi = torch.FloatTensor([np.pi]).to(value.device)
-    
-    nll_element = (value - mean).pow(2) / torch.exp(logvar) + logvar + torch.log(2 * pi)
 
-    if mask is not None:
-        # Ensure mask dtype is float for multiplication
-        mask = mask.to(dtype=nll_element.dtype)
-        masked_nll = nll_element * mask
-        # Compute mean only over valid elements (avoid division by zero)
-        loss = 0.5 * masked_nll.sum() / mask.sum().clamp_min(1)
+    # Default mask: everything is valid
+    if mask is None:
+        mask = torch.ones_like(value, dtype=torch.bool)
     else:
-        loss = 0.5 * nll_element.mean()
-    
+        mask = mask.bool()  # Make sure it's boolean
+
+    # Only compute on valid entries
+    valid_mean = mean[mask]
+    valid_logvar = logvar[mask]
+    valid_value = value[mask]
+
+    # Compute NLL only on valid entries
+    nll_element = ((valid_value - valid_mean) ** 2) / torch.exp(valid_logvar) + valid_logvar + torch.log(2 * pi)
+    loss = 0.5 * nll_element.mean()
+
     return loss
 
 
-def nll_gaussian_stable(mean, variance, value, pi=None, mask = None):
+def nll_gaussian_stable(mean, variance, value, mask=None, pi=None, eps=1e-6):
     """
-    Compute negative log-likelihood of Gaussian (numerically stable version).
+    Numerically stable negative log-likelihood of Gaussian with masking,
+    avoiding any computation at invalid (masked out) positions.
     
     Args:
-        mean: Mean of the Gaussian distribution
-        variance: Variance of the Gaussian distribution
-        value: Target values
-        pi: Pre-computed pi tensor (optional)
-    
+        mean: Mean tensor
+        variance: Variance tensor (must be > 0)
+        value: Target tensor
+        mask: Boolean tensor, True where data is valid
+        pi: Optional precomputed pi tensor
+        eps: Small epsilon to stabilize log/variance
     Returns:
-        Negative log-likelihood loss
+        Scalar loss: average NLL over valid entries
     """
     assert mean.size() == variance.size() == value.size()
-    
+
     if pi is None:
         pi = torch.FloatTensor([np.pi]).to(value.device)
-    
-    logvar = torch.log(variance)
-    nll_element = (value - mean).pow(2) / variance + logvar + torch.log(2 * pi)
 
     if mask is not None:
-        mask = mask.to(dtype=nll_element.dtype)
-        masked_nll = nll_element * mask
-        loss = 0.5 * masked_nll.sum() / mask.sum().clamp_min(1)
+        # Mask out all tensors before computation
+        mask = mask.to(dtype=torch.bool)
+        mean = mean[mask]
+        variance = variance[mask].clamp(min=eps)
+        value = value[mask]
     else:
-        loss = 0.5 * nll_element.mean()
-    return loss
+        variance = variance.clamp(min=eps)
 
+    logvar = torch.log(variance)
+    nll_element = (value - mean).pow(2) / variance + logvar + torch.log(2 * pi)
+    loss = 0.5 * nll_element.mean()
+
+    return loss
 
 def spatial_smoothness_loss(logvar, weight=0.1):
     """Penalize large differences between neighboring pixels"""
@@ -1316,41 +1318,147 @@ def run_final_validation(model, val_data, epoch, config, wandb_manager, accelera
     elif accelerator.is_main_process and config.get('validation', {}).get('enable_visual_validation', False):
         print("\nSkipping visual validation - no validation data loaded")
 
-def show_prediction_vs_groundtruth_wandb(pred, truth, idx, acq_dt_float=None, pad_val=-9999.0, wandb_run=None):
+# def show_prediction_vs_groundtruth_wandb(
+#     pred, truth, idx, acq_dt_float=None, pad_val=-9999.0, wandb_manager=None
+# ):
+#     """
+#     Show predicted vs actual image side-by-side for a single sample.
+#     Logs the figure directly to Weights & Biases via WandBManager.
+#     Does NOT save or show the figure.
+
+#     Args:
+#         pred: Tensor (C, H, W)
+#         truth: Tensor (C, H, W)
+#         idx: Sample index (for labeling)
+#         acq_dt_float: Optional acquisition date float for caption
+#         pad_val: Padding value to exclude for vmin/vmax
+#         wandb_manager: WandBManager instance (if None, logging is skipped)
+#     """
+
+#     if wandb_manager is None or not getattr(wandb_manager, "enabled", True):
+#         print("Warning: wandb_manager not provided or disabled. Logging skipped.")
+#         return
+
+#     pred = pred.cpu().numpy()
+#     truth = truth.cpu().numpy()
+#     num_channels = pred.shape[0]
+
+#     # Compute vmin/vmax per channel excluding pad_val/NaN
+#     vmin_list, vmax_list = [], []
+#     for c in range(num_channels):
+#         ch_data = np.concatenate([pred[c].flatten(), truth[c].flatten()])
+#         ch_data = ch_data[ch_data != pad_val]
+#         ch_data = ch_data[~np.isnan(ch_data)]
+#         if ch_data.size == 0:  # fallback in case everything is padding
+#             vmin_list.append(0.0)
+#             vmax_list.append(1.0)
+#         else:
+#             vmin_list.append(np.percentile(ch_data, 2))
+#             vmax_list.append(np.percentile(ch_data, 98))
+
+#     # Build date string if provided
+#     date_str = ""
+#     if acq_dt_float is not None:
+#         base_date = datetime.datetime(2014, 1, 1)
+#         if acq_dt_float == pad_val:
+#             date_str = "padding"
+#         else:
+#             date = base_date + datetime.timedelta(days=float(acq_dt_float) * 365.25)
+#             date_str = date.strftime("%Y-%m-%d")
+
+#     # Figure size scales with channels
+#     fig_width = 5 * num_channels + 2
+#     fig, axes = plt.subplots(
+#         2, num_channels, figsize=(fig_width, 6),
+#         gridspec_kw={'width_ratios': [1] * num_channels, 'wspace': 0.3}
+#     )
+#     if num_channels == 1:
+#         axes = np.expand_dims(axes, axis=1)
+
+#     # Plot predicted and ground truth with colorbars
+#     for c in range(num_channels):
+#         axes[0, c].imshow(pred[c], cmap="viridis",
+#                           vmin=vmin_list[c], vmax=vmax_list[c])
+#         axes[0, c].set_title(f"Predicted - Channel {c}\n{date_str}", fontsize=9)
+#         axes[0, c].axis("off")
+
+#         axes[1, c].imshow(truth[c], cmap="viridis",
+#                           vmin=vmin_list[c], vmax=vmax_list[c])
+#         axes[1, c].set_title(f"Ground Truth - Channel {c}\n{date_str}", fontsize=9)
+#         axes[1, c].axis("off")
+
+#         # Evenly space colorbars
+#         total_cbar_width = 0.15  # fraction of figure width reserved for all colorbars
+#         start = 0.88
+#         step = total_cbar_width / max(num_channels, 1)
+#         left_pos = start + step * c
+#         cbar_ax = fig.add_axes([left_pos, 0.15, 0.02, 0.7])  # [left, bottom, width, height]
+
+#         norm = colors.Normalize(vmin=vmin_list[c], vmax=vmax_list[c])
+#         sm = cm.ScalarMappable(cmap="viridis", norm=norm)
+#         cbar = fig.colorbar(sm, cax=cbar_ax)
+#         cbar.set_label(f"Channel {c} Pixel Value")
+
+#     # Log to wandb via WandBManager
+#     wandb_manager.log({
+#         f"prediction_vs_groundtruth/sample_{idx}": wandb.Image(fig)
+#     })
+
+#     plt.close(fig)
+
+def show_prediction_vs_groundtruth_wandb(
+    pred, log_var, truth, pre_imgs, idx,
+    acq_dt_float=None, pad_val=-9999.0, wandb_manager=None
+):
     """
-    Show predicted vs actual image side-by-side for a single sample.
-    Logs the figure directly to wandb. Does NOT save or show the figure.
-    
-    Args:
-        pred: Tensor (C, H, W)
-        truth: Tensor (C, H, W)
-        idx: Sample index (for labeling)
-        acq_dt_float: Optional acquisition date float for caption
-        pad_val: Padding value to exclude for vmin/vmax
-        wandb_run: wandb run instance (if None, uses wandb.run)
+    Show:
+      - Last 2 pre images before prediction
+      - Prediction (masked NaNs), Ground Truth, Std Dev
+      - Separate colorbars for image values and std
+    Logs directly to Weights & Biases via WandBManager.
     """
 
-    if wandb_run is None:
-        import wandb
-        wandb_run = wandb.run
-        if wandb_run is None:
-            print("Warning: No active wandb run detected. Logging skipped.")
-            return
+    if wandb_manager is None or not getattr(wandb_manager, "enabled", True):
+        print("Warning: wandb_manager not provided or disabled. Logging skipped.")
+        return
 
     pred = pred.cpu().numpy()
+    log_var = log_var.cpu().numpy()
     truth = truth.cpu().numpy()
+    pre_imgs = pre_imgs.cpu().numpy()
+
+    std_map = np.sqrt(np.exp(log_var))  # std from log var
     num_channels = pred.shape[0]
 
-    # Compute vmin/vmax per channel excluding pad_val
-    vmin_list, vmax_list = [], []
-    for c in range(num_channels):
-        ch_data = np.concatenate([pred[c].flatten(), truth[c].flatten()])
-        ch_data = ch_data[ch_data != pad_val]
-        ch_data = ch_data[~np.isnan(ch_data)]
-        vmin_list.append(np.percentile(ch_data, 2))
-        vmax_list.append(np.percentile(ch_data, 98))
+    # Mask prediction where truth is NaN
+    nan_mask = np.isnan(truth)
+    pred_masked = pred.copy()
+    pred_masked[nan_mask] = np.nan
 
-    # Build date string if provided
+    # Compute vmin/vmax per channel
+    vmin_list, vmax_list = [], []
+    std_vmin_list, std_vmax_list = [], []
+    for c in range(num_channels):
+        ch_data = np.concatenate([
+            pred[c].flatten(), truth[c].flatten(), pre_imgs[-1, c].flatten()
+        ])
+        ch_data = ch_data[~np.isnan(ch_data)]
+        ch_data = ch_data[ch_data != pad_val]
+        if ch_data.size == 0:
+            vmin_list.append(0.0); vmax_list.append(1.0)
+        else:
+            vmin_list.append(np.percentile(ch_data, 2))
+            vmax_list.append(np.percentile(ch_data, 98))
+
+        std_ch_data = std_map[c].flatten()
+        std_ch_data = std_ch_data[~np.isnan(std_ch_data)]
+        if std_ch_data.size == 0:
+            std_vmin_list.append(0.0); std_vmax_list.append(1.0)
+        else:
+            std_vmin_list.append(np.percentile(std_ch_data, 2))
+            std_vmax_list.append(np.percentile(std_ch_data, 98))
+
+    # Date string
     date_str = ""
     if acq_dt_float is not None:
         base_date = datetime.datetime(2014, 1, 1)
@@ -1360,70 +1468,105 @@ def show_prediction_vs_groundtruth_wandb(pred, truth, idx, acq_dt_float=None, pa
             date = base_date + datetime.timedelta(days=float(acq_dt_float) * 365.25)
             date_str = date.strftime("%Y-%m-%d")
 
-    # Figure size scales with channels
+    # Figure: 5 rows (T-2, T-1, Prediction, Ground Truth, Std)
     fig_width = 5 * num_channels + 2
     fig, axes = plt.subplots(
-        2, num_channels, figsize=(fig_width, 6),
+        5, num_channels, figsize=(fig_width, 12),
         gridspec_kw={'width_ratios': [1] * num_channels, 'wspace': 0.3}
     )
     if num_channels == 1:
         axes = np.expand_dims(axes, axis=1)
 
-    # Plot predicted and ground truth with colorbars
     for c in range(num_channels):
-        axes[0, c].imshow(pred[c], cmap="viridis",
+        channel_name = "Copol" if c == 0 else "Crosspol"
+
+        # Pre images
+        axes[0, c].imshow(pre_imgs[-2, c], cmap="viridis",
                           vmin=vmin_list[c], vmax=vmax_list[c])
-        axes[0, c].set_title(f"Predicted - Channel {c}\n{date_str}", fontsize=9)
+        axes[0, c].set_title(f"Pre Img T-2 - {channel_name}", fontsize=9)
         axes[0, c].axis("off")
 
-        axes[1, c].imshow(truth[c], cmap="viridis",
+        axes[1, c].imshow(pre_imgs[-1, c], cmap="viridis",
                           vmin=vmin_list[c], vmax=vmax_list[c])
-        axes[1, c].set_title(f"Ground Truth - Channel {c}\n{date_str}", fontsize=9)
+        axes[1, c].set_title(f"Pre Img T-1 - {channel_name}", fontsize=9)
         axes[1, c].axis("off")
 
-        # Evenly space colorbars
-        total_cbar_width = 0.15  # fraction of figure width reserved for all colorbars
+        # Prediction
+        im_pred = axes[2, c].imshow(pred_masked[c], cmap="viridis",
+                                    vmin=vmin_list[c], vmax=vmax_list[c])
+        axes[2, c].set_title(f"Predicted - {channel_name}\n{date_str}", fontsize=9)
+        axes[2, c].axis("off")
+
+        # Ground truth
+        axes[3, c].imshow(truth[c], cmap="viridis",
+                          vmin=vmin_list[c], vmax=vmax_list[c])
+        axes[3, c].set_title(f"Ground Truth - {channel_name}\n{date_str}", fontsize=9)
+        axes[3, c].axis("off")
+
+        # Std Dev
+        im_std = axes[4, c].imshow(std_map[c], cmap="magma",
+                                   vmin=std_vmin_list[c], vmax=std_vmax_list[c])
+        axes[4, c].set_title(f"Std Dev - {channel_name}", fontsize=9)
+        axes[4, c].axis("off")
+
+        # ---- Colorbars ----
+        total_cbar_width = 0.15
         start = 0.88
         step = total_cbar_width / max(num_channels, 1)
         left_pos = start + step * c
-        cbar_ax = fig.add_axes([left_pos, 0.15, 0.02, 0.7])  # [left, bottom, width, height]
 
-        norm = colors.Normalize(vmin=vmin_list[c], vmax=vmax_list[c])
-        sm = cm.ScalarMappable(cmap="viridis", norm=norm)
-        cbar = fig.colorbar(sm, cax=cbar_ax)
-        cbar.set_label(f"Channel {c} Pixel Value")
+        # Image values cbar
+        cbar_ax_img = fig.add_axes([left_pos, 0.55, 0.02, 0.35])
+        sm_img = cm.ScalarMappable(
+            cmap="viridis",
+            norm=colors.Normalize(vmin=vmin_list[c], vmax=vmax_list[c])
+        )
+        cbar_img = fig.colorbar(sm_img, cax=cbar_ax_img)
+        cbar_img.set_label(f"Ch {c} Value")
 
-    # Log to wandb (no save or show)
-    wandb_run.log({f"prediction_vs_groundtruth/sample_{idx}": wandb.Image(fig)})
+        # Std cbar
+        cbar_ax_std = fig.add_axes([left_pos, 0.15, 0.02, 0.25])
+        sm_std = cm.ScalarMappable(
+            cmap="magma",
+            norm=colors.Normalize(vmin=std_vmin_list[c], vmax=std_vmax_list[c])
+        )
+        cbar_std = fig.colorbar(sm_std, cax=cbar_ax_std)
+        cbar_std.set_label(f"Ch {c} Std")
+
+    # Log to wandb
+    wandb_manager.log({
+        f"prediction_vs_groundtruth/sample_{idx}": wandb.Image(fig)
+    })
+
     plt.close(fig)
+
 
 def get_test_batch(test_loader, model, device):
     # Get a random batch from test_loader
-    # ----------------------------
     with torch.no_grad():
         for batch in test_loader:
-            #input_size = getattr(model, "patch_size", 16)  # fallback to 16 if not found
             input_size = 16
 
-            train_batch = batch["pre_imgs"].to(device, non_blocking=True)  # (B, T, C, H, W)
+            # (B, T, C, H, W)
+            pre_imgs = batch["pre_imgs"].to(device, non_blocking=True)  
             target_batch = batch["post_img"].to(device, non_blocking=True)  # (B, C, H, W)
             acq_dts_float = batch["acq_dts_float"].to(device, non_blocking=True).float()  # (B, T+1)
 
-            # Clamp values as in training
-            train_batch.clamp_(0, math.pi)
+            # Clamp values like in training
+            pre_imgs.clamp_(0, math.pi)
             target_batch.clamp_(0, math.pi)
 
             # Cut acq_dts_float to match input length
             acq_dts_input = acq_dts_float[:, :-1]  # (B, T)
 
-            B, T, C, H, W = train_batch.shape
+            B, T, C, H, W = pre_imgs.shape
             P = (H // input_size) * (W // input_size)
 
-            # Rearrange train_batch and target_batch like in training
-            train_batch = rearrange(train_batch, 'b t c (h ph) (w pw) -> (b h w) t c ph pw', ph=input_size, pw=input_size)
-            target_batch = rearrange(target_batch, 'b c (h ph) (w pw) -> (b h w) c ph pw', ph=input_size, pw=input_size)
-
-            print(train_batch.shape)
+            # Patchify
+            train_batch = rearrange(pre_imgs, 'b t c (h ph) (w pw) -> (b h w) t c ph pw', 
+                                    ph=input_size, pw=input_size)
+            target_batch = rearrange(target_batch, 'b c (h ph) (w pw) -> (b h w) c ph pw', 
+                                     ph=input_size, pw=input_size)
 
             # Expand acq_dts_input across patches
             acq_dts_input = acq_dts_input.unsqueeze(1).repeat(1, P, 1).view(B * P, T)
@@ -1431,9 +1574,21 @@ def get_test_batch(test_loader, model, device):
             # Forward pass
             pred_mean, pred_log_var = model(train_batch)
 
-            # Reshape prediction back to (B, C, H, W)
-            pred_mean = rearrange(pred_mean, '(b h w) c ph pw -> b c (h ph) (w pw)', b=B, h=H // input_size, w=W // input_size, ph=input_size, pw=input_size)
-            pred_log_var = rearrange(pred_log_var, '(b h w) c ph pw -> b c (h ph) (w pw)', b=B, h=H // input_size, w=W // input_size, ph=input_size, pw=input_size)
-            target_batch = rearrange(target_batch, '(b h w) c ph pw -> b c (h ph) (w pw)', b=B, h=H // input_size, w=W // input_size, ph=input_size, pw=input_size)
+            # Reconstruct to (B, C, H, W)
+            pred_mean = rearrange(pred_mean, '(b h w) c ph pw -> b c (h ph) (w pw)', 
+                                  b=B, h=H // input_size, w=W // input_size, 
+                                  ph=input_size, pw=input_size)
+            pred_log_var = rearrange(pred_log_var, '(b h w) c ph pw -> b c (h ph) (w pw)', 
+                                     b=B, h=H // input_size, w=W // input_size, 
+                                     ph=input_size, pw=input_size)
+            target_batch = rearrange(target_batch, '(b h w) c ph pw -> b c (h ph) (w pw)', 
+                                     b=B, h=H // input_size, w=W // input_size, 
+                                     ph=input_size, pw=input_size)
+
             break  # just one batch
-    return pred_mean, pred_log_var, target_batch
+
+    # Now also return the original pre_imgs (unpached, still B, T, C, H, W)
+    return pred_mean, pred_log_var, target_batch, pre_imgs, acq_dts_float
+
+
+    

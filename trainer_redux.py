@@ -7,8 +7,12 @@ import numpy as np
 import math
 import torch
 import torch.nn.functional as F
+from torch.nn.utils.rnn import pad_sequence
 from accelerate import Accelerator
 from einops import rearrange
+from torch.utils.data import Subset, random_split
+
+import random
 
 # Dataset loader
 from src.dataset import DistS1Dataset
@@ -28,6 +32,8 @@ from src.utils import (
     save_emergency_state,
     setup_warnings,
     validate_visual,
+    show_prediction_vs_groundtruth_wandb, 
+    get_test_batch
 )
 from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import DataLoader, random_split
@@ -174,34 +180,35 @@ def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accele
     return nll_average, mse_average, naive_nll_average, naive_mse_average
 
 
-def left_pad_sequences(sequences, T_max, nodata_value=np.nan):
-    batch_size = len(sequences)
-    sample_shape = sequences[0].shape[1:] if sequences[0].ndim > 1 else ()
+def left_pad_torch(sequences, T_max, nodata_value=-9999.0):
+    # sequences: list of tensors (T_i, C, H, W)
+    reversed_seqs = [seq.flip(0) for seq in sequences]  # reverse in time for left-pad
+    padded = pad_sequence(reversed_seqs, batch_first=True, padding_value=nodata_value)
+    padded = padded.flip(1)  # flip back to original order
 
-    padded = np.full((batch_size, T_max, *sample_shape), nodata_value, dtype=sequences[0].dtype)
-    lengths = np.zeros(batch_size, dtype=np.int64)
+    # trim or pad to exact T_max
+    if padded.size(1) < T_max:
+        pad_size = (0, 0) * (padded.ndim - 2) + (T_max - padded.size(1), 0)  # pad at start
+        padded = torch.nn.functional.pad(padded, pad_size, value=nodata_value)
+    elif padded.size(1) > T_max:
+        padded = padded[:, -T_max:]  # keep last T_max frames
 
-    for i, seq in enumerate(sequences):
-        T = seq.shape[0]
-        lengths[i] = T
-        padded[i, T_max - T :] = seq
-
+    lengths = torch.tensor([seq.size(0) for seq in sequences])
     return padded, lengths
 
 
 def custom_collate_fn(batch, T_max=21):
-    pre_imgs = [item['pre_imgs'] for item in batch]
-    post_img = np.stack([item['post_img'] for item in batch])
-    dts = [item['acq_dts_float'] for item in batch]
+    pre_imgs = [torch.tensor(item['pre_imgs']) for item in batch]
+    post_img = torch.stack([torch.tensor(item['post_img']) for item in batch])
+    dts = [torch.tensor(item['acq_dts_float']) for item in batch]
 
-    padded_pre_imgs, _ = left_pad_sequences(pre_imgs, T_max, nodata_value=-9999)
-    # dts include the post-img date, so we add one to T_max
-    padded_dts, _ = left_pad_sequences(dts, T_max + 1)
+    padded_pre_imgs, _ = left_pad_torch(pre_imgs, T_max, nodata_value=-9999.0)
+    padded_dts, _ = left_pad_torch(dts, T_max + 1, nodata_value=float('nan'))
 
     return {
-        'pre_imgs': torch.from_numpy(padded_pre_imgs),
-        'post_img': torch.from_numpy(post_img),
-        'acq_dts_float': torch.from_numpy(padded_dts),
+        'pre_imgs': padded_pre_imgs,
+        'post_img': post_img,
+        'acq_dts_float': padded_dts,
     }
 
 
@@ -246,25 +253,33 @@ def main():
     # Set random seeds
     torch.manual_seed(config['train_config']['seed'])
     np.random.seed(config['train_config']['seed'])
-
-    # Load data
+    # Load full dataset
     dist_dataset = DistS1Dataset(config['data']['data_dir_path'])
-    train_size = int(0.8 * len(dist_dataset))
-    test_size = len(dist_dataset) - train_size
 
+    # Pick 2.5% of dataset
+
+    subset_size = int(0.025 * len(dist_dataset))
     generator = torch.Generator().manual_seed(42)
-    train_dataset, test_dataset = random_split(dist_dataset, [train_size, test_size], generator=generator)
+    subset_indices = torch.randperm(len(dist_dataset), generator=generator)[:subset_size].tolist()  # convert to ints
+    small_dataset = Subset(dist_dataset, subset_indices)
 
+    # Split that small subset into train/test (80/20 split here)
+    train_size = int(0.8 * len(small_dataset))
+    test_size = len(small_dataset) - train_size
+    train_dataset, test_dataset = random_split(small_dataset, [train_size, test_size], generator=generator)
+
+    # Dataloaders
     train_loader = DataLoader(
-        train_dataset, batch_size=config['train_config']['batch_size'], shuffle=True, collate_fn=custom_collate_fn, pin_memory = True, 
-        num_workers = 6, persistent_workers=True,  prefetch_factor=4, multiprocessing_context='fork' 
+        train_dataset, batch_size=config['train_config']['batch_size'], shuffle=True,
+        collate_fn=custom_collate_fn, pin_memory=True, num_workers=6, persistent_workers=True,
+        prefetch_factor=4, multiprocessing_context='fork'
     )
 
     test_loader = DataLoader(
-        test_dataset, batch_size=config['train_config']['batch_size'], shuffle=True, collate_fn=custom_collate_fn, pin_memory = True,
-        num_workers = 6, persistent_workers=True,  prefetch_factor=4, multiprocessing_context='fork' 
+        test_dataset, batch_size=config['train_config']['batch_size'], shuffle=True,
+        collate_fn=custom_collate_fn, pin_memory=True, num_workers=6, persistent_workers=True,
+        prefetch_factor=4, multiprocessing_context='fork'
     )
-
 
     # Debug dataset sizes
     if accelerator.is_main_process:
@@ -479,7 +494,7 @@ def main():
 
             # Save checkpoint (only from main process)
             if epoch % config['train_config']['checkpoint_freq'] == 0:
-                checkpoint_path = Path(config['save_dir']['checkpoints']) / f'checkpoint_epoch_{epoch}_{now}.pth'
+                checkpoint_path = Path(config['save_dir']['checkpoints']) / f'checkpoint_epoch_{epoch}_{now}_nan_param_masked_pad_param.pth'
                 save_checkpoint(
                     model, optimizer, scheduler, epoch, config, metrics_history, checkpoint_path, accelerator
                 )
@@ -487,9 +502,30 @@ def main():
                 # Save model (only from main process)
                 if accelerator.is_main_process:
                     model_path = (
-                        Path(config['save_dir']['models']) / f'{config["model_config"]["type"]}_{now}_epoch_{epoch}.pth'
+                        Path(config['save_dir']['models']) / f'{config["model_config"]["type"]}_{now}_epoch_{epoch}_nan_param_masked_pad_param.pth'
                     )
                     torch.save(accelerator.get_state_dict(model), model_path)
+
+                    # --- New: Visualize and log 5 random test images ---
+                pred_mean, pred_log_var, target_batch = get_test_batch(test_loader, model, accelerator.device)
+
+                batch_size = pred_mean.shape[0]
+                sample_indices = random.sample(range(batch_size), min(5, batch_size))
+
+                for idx in sample_indices:
+                    # Pick predicted and ground truth for sample idx
+                    pred = pred_mean[idx]
+                    truth = target_batch[idx]
+
+                    ##TODO: Add date info to acquisition visuals
+                    show_prediction_vs_groundtruth_wandb(
+                        pred=pred,
+                        truth=truth,
+                        idx=idx,
+                        acq_dt_float=None,  # Or pass actual date if you extend get_test_batch to return it
+                        pad_val=-9999.0,
+                        wandb_run=wandb_manager  # uses current active run automatically
+                    )
 
             scheduler.step()
 
@@ -518,7 +554,7 @@ def main():
         # Save final checkpoint only if training completed normally (only from main process)
         if not killer.kill_now and 'epoch' in locals() and epoch == config['train_config']['num_epochs']:
             if accelerator.is_main_process:
-                final_checkpoint_path = Path(config['save_dir']['checkpoints']) / f'final_checkpoint_{now}.pth'
+                final_checkpoint_path = Path(config['save_dir']['checkpoints']) / f'final_checkpoint_{now}_nan_param_masked_pad_param.pth'
                 save_checkpoint(
                     model, optimizer, scheduler, epoch, config, metrics_history, final_checkpoint_path, accelerator
                 )

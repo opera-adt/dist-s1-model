@@ -32,13 +32,20 @@ Update the data paths in your configuration file (see Configuration section belo
 
 **Note:**
 
-We currently support two different datasets:
+We currently support three different style of datasets:
 
-1. sequential time-series to establish baselines and 
-2. another that uses windows around anniversary date from the target/post-image acquisition to establish a baseline. 
+1. `v0`: sequential time-series to establish baselines that have been denoised, and nodata and surface water filled in with 0s
+2. `v1`: Same pre-processing as 1. except curated around anniversary date from the target/post-image acquisition to establish a baseline.
+3. `v2`: No pre-processing (i.e. no despeckling and no mask filling) using the curation from 2. - though additionally allow variable time-lengths 
 
-The former is the original work that was done to prototype the algorithm and the latter is what OPERA project aims to support to be in line with the OPERA DIST suite. Currently all the `*-redux` or `Redux` are for the latter more recent dataset regarding windows around anniversary dates (.i.e. 2).
-We will support both for provenance, though our current focus will be on the newer dataset with the project's goal in mind.
+4. is the original data curation that was done to demonstrate this approach in Hardiman, et al. 2. represents what OPERA project aims to support to be in line with the OPERA DIST suite. 3. is to further push the ability of the model in order to perform both despeckling and baseline estimation.
+Currently all the `*-redux` or `Redux` are for 3.
+
+### Downloading data
+
+1. `v0` can be downloaded from this public `s3` bucket: `s3://opera-dist-s1-training-data/v0` (~60 GB)
+2. `v1` can be downloaded from this public `s3` bucket: `s3://opera-dist-s1-training-data/v1` (~75 GB)
+3. `v2` can be generated from this repository (note it is approximately 27 TB): https://github.com/opera-adt/dist-s1-training-data
 
 ### YAML Configuration File
 
@@ -85,8 +92,6 @@ validation:
 use_wandb: true
 wandb_project: "dist-s1-training"
 wandb_entity: "your-entity"
-
-
 
 # Resume training (optional)
 # resume_checkpoint: "/path/to/checkpoint.pth"
@@ -261,13 +266,11 @@ A separate repository for SAR data curation is planned. This is currently a work
 
 - Hardiman-Mostow, Harris, Charles Marshak, and Alexander L. Handwerger. "Deep Self-Supervised Disturbance Mapping with the OPERA Sentinel-1 Radiometric Terrain Corrected SAR Backscatter Product." IEEE Journal of Selected Topics in Applied Earth Observations and Remote Sensing (2025). [arXiv](https://arxiv.org/abs/2501.09129)
 
-## License
-
-[Add your license information here]
 
 ## Contributing
 
-[Add contributing guidelines here]
+This is an open-source research repository to provide provenance of the models used to measure disturbance.
+Please open up an issue and we can work together to fix bugs.
 
 ## Support
 

@@ -13,6 +13,7 @@ from einops import rearrange
 
 # Core model and utilities
 from src.dist_model import SpatioTemporalTransformer
+from src.dataset import StreamShardDataset
 from src.utils import (
     GracefulKiller,
     WandBManager,
@@ -30,42 +31,8 @@ from src.utils import (
 from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import DataLoader
 
-from torch.utils.data import IterableDataset, DataLoader, get_worker_info
+from torch.utils.data import DataLoader
 
-class StreamShardDataset(IterableDataset):
-    def __init__(self, shard_paths, shuffle=True):
-        self.shard_paths = list(shard_paths)
-        self.shuffle     = shuffle
-
-    def _shard_iterator(self, paths):
-        for p in paths:
-            x, y = torch.load(p, map_location='cpu', weights_only=False)
-            for xi, yi in zip(x, y):
-                yield xi, yi
-            del x, y
-
-    def __iter__(self):
-        # Worker-aware sharding
-        info = get_worker_info()
-        paths = self.shard_paths
-        if self.shuffle:
-            random.shuffle(paths)
-
-        if info is not None:
-            n = len(paths)
-            per_worker = int(math.ceil(n / info.num_workers))
-            paths = paths[info.id*per_worker : (info.id+1)*per_worker]
-
-        return self._shard_iterator(paths)
-
-    def __len__(self):
-        total = 0
-        for p in self.shard_paths:
-            x, _ = torch.load(p, map_location='cpu', weights_only=False)
-            total += x.size(0)
-            del x
-        return total
-    
 
 def safe_logit(x, eps=1e-6):
     x = torch.clamp(x, eps, 1 - eps)
@@ -106,9 +73,6 @@ def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accele
         # Data goes from Batch x Time X Channels X H x W -> (B h w) time channel ph pw, h = w = # of patches
         batch = rearrange(batch, 'b t c (h ph) (w pw) -> (b h w) t c ph pw', ph=input_size, pw=input_size)
         target = rearrange(target, 'b c (h ph) (w pw) -> (b h w) c ph pw', ph=input_size, pw=input_size)
-
-        # target = torch.special.logit(target)
-        # batch = torch.special.logit(batch)
 
         target = safe_logit(target)
         batch = safe_logit(batch)
@@ -250,8 +214,8 @@ def main():
     np.random.seed(config['train_config']['seed'])
 
     # Load data
-    train_dataset =  StreamShardDataset(Path(config['data']['train_path']).glob("train_*.pt"))
-    test_dataset = StreamShardDataset(Path(config['data']['test_path']).glob("test_*.pt"))
+    train_dataset =  StreamShardDataset(config['data']['train_path'], prefix='train')
+    test_dataset = StreamShardDataset(config['data']['test_path'], prefix='test')
 
     # Debug dataset sizes
     if accelerator.is_main_process:

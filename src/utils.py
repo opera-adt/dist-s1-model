@@ -1573,7 +1573,7 @@ def get_test_batch(test_loader, model, device):
             acq_dts_input = acq_dts_input.unsqueeze(1).repeat(1, P, 1).view(B * P, T)
 
             # Forward pass
-            pred_mean, pred_log_var = model(train_batch)
+            pred_mean, pred_log_var = model(train_batch, acq_dts_input)
 
             # Reconstruct to (B, C, H, W)
             pred_mean = rearrange(pred_mean, '(b h w) c ph pw -> b c (h ph) (w pw)', 

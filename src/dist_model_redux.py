@@ -29,6 +29,29 @@ class TransformerEncoderWithMask(nn.TransformerEncoder):
         return output
 
 
+class MLPTimeEmbedding(nn.Module):
+    def __init__(self, out_dim=128):
+        super().__init__()
+        self.project = nn.Sequential(
+            nn.Linear(1, 64),
+            nn.ReLU(),
+            nn.Linear(64, 128),
+            nn.ReLU(),
+            nn.Linear(128, out_dim)
+        )
+
+    def forward(self, acq_dts_float):
+        """
+        Args:
+            acq_dts_float: Tensor of shape (B, T) — float days since 2014-01-01
+        Returns:
+            time_emb: Tensor of shape (B, T, out_dim)
+        """
+        # Add feature dimension
+        t = acq_dts_float.unsqueeze(-1)  # (B, T, 1)
+        return self.project(t)            # (B, T, out_dim)
+
+
 class SpatioTemporalTransformerRedux(nn.Module):
     def __init__(self, model_config: dict) -> None:
         super().__init__()
@@ -45,13 +68,15 @@ class SpatioTemporalTransformerRedux(nn.Module):
         self.num_patches = int((self.input_size / self.patch_size) ** 2)
         self.data_dim = model_config['data_dim']
 
-        # Learnable tokens
-        self.nan_token = nn.Parameter(torch.zeros(2)) ##one for each channel TODO: consider defining as a vector in self.d_model space and learn it this way
-        self.pad_embed = nn.Parameter(torch.zeros(1, 1, self.d_model))  # PAD embedding in d_model space
+        # Learnable tokens - initialize with small random values instead of zeros
+        self.nan_token = nn.Parameter(torch.randn(2) * 0.02)  # Small random initialization
+        self.pad_embed = nn.Parameter(torch.randn(1, 1, self.d_model) * 0.02)  # PAD embedding in d_model space
 
         self.embedding = nn.Linear(self.data_dim, self.d_model)
         self.spatial_pos_embed = nn.Parameter(torch.zeros(1, 1, self.num_patches, self.d_model))
-        self.temporal_pos_embed = nn.Parameter(torch.zeros(1, self.max_seq_len, 1, self.d_model))
+        
+        # Replace positional temporal embedding with MLP-based one
+        self.temporal_embedding = MLPTimeEmbedding(out_dim=self.d_model)
 
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=self.d_model,
@@ -79,19 +104,24 @@ class SpatioTemporalTransformerRedux(nn.Module):
 
     @staticmethod
     def _neg_large_for_dtype(dtype: torch.dtype) -> float:
+        # Use more conservative negative values to prevent overflow
         if dtype in (torch.float16, torch.bfloat16):
-            return float(torch.finfo(dtype).min / 2)
-        return -1e9
+            return -1e4  # More conservative for mixed precision
+        return -1e6  # More conservative than -1e9
 
     def replace_nans_only(self, x):
-        """Replace NaNs with learned nan_token."""
+        """Replace NaNs with learned nan_token and clamp to prevent extreme values."""
         nan_mask = torch.isnan(x)
         if nan_mask.any():
             token = self.nan_token.view(1, 1, -1, 1, 1)  # (1,1,C,1,1) broadcasts to (B,T,C,H,W)
+            # Clamp token values to prevent extreme values
+            token = torch.clamp(token, min=-10.0, max=10.0)
             x = torch.where(nan_mask, token, x)
+        # Additional safety: clamp the entire tensor to prevent extreme values
+        x = torch.clamp(x, min=-10.0, max=10.0)
         return x
 
-    def forward(self, img_baseline: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, img_baseline: torch.Tensor, acq_dts_float: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         B, T, C, H, W = img_baseline.shape
         device = img_baseline.device
         dtype = img_baseline.dtype
@@ -121,8 +151,14 @@ class SpatioTemporalTransformerRedux(nn.Module):
         seq_nan_mask = patch_nan_mask.reshape(B, L)  # (B, L)
         seq_pad_mask = patch_pad_mask.reshape(B, L)  # (B, L)
 
+        # Generate temporal embeddings from acquisition dates
+        # Replace any NaN values in acquisition dates with 0
+        acq_dts_clamped = torch.where(torch.isnan(acq_dts_clamped), torch.zeros_like(acq_dts_clamped), acq_dts_clamped)
+        temporal_emb = self.temporal_embedding(acq_dts_clamped)  # (B, T, d_model)
+        temporal_emb = temporal_emb.unsqueeze(2).expand(-1, -1, self.num_patches, -1)  # (B, T, P, d_model)
+        
         #Define inputs
-        x = self.embedding(x) + self.spatial_pos_embed + self.temporal_pos_embed[:, (self.max_seq_len - T):, :, :]
+        x = self.embedding(x) + self.spatial_pos_embed + temporal_emb
         x = x.view(B, L, self.d_model)
 
         # Insert learnable pad embedding at PAD positions -- helps w stability
@@ -152,9 +188,19 @@ class SpatioTemporalTransformerRedux(nn.Module):
         src_key_padding_mask = seq_pad_mask  # (B, L) True = ignore PAD keys
 
         output = self.transformer_encoder(x, attn_mask=attn_mask, src_key_padding_mask=src_key_padding_mask)
+        
+        # Add numerical stability checks
+        if torch.isnan(output).any() or torch.isinf(output).any():
+            print("Warning: NaN/Inf detected in transformer output, applying emergency clipping")
+            output = torch.clamp(output, min=-100.0, max=100.0)
+            output = torch.where(torch.isnan(output), torch.zeros_like(output), output)
 
         mean = self.mean_out(output)
         logvar = self.logvar_out(output)
+        
+        # Clamp outputs to prevent extreme values
+        mean = torch.clamp(mean, min=-10.0, max=10.0)
+        logvar = torch.clamp(logvar, min=-10.0, max=5.0)  # Prevent extremely large variances
 
         mean = mean.view(B, T, self.num_patches, self.data_dim)
         logvar = logvar.view(B, T, self.num_patches, self.data_dim)

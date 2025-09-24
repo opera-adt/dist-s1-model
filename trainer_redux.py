@@ -69,14 +69,18 @@ def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accele
 
         train_batch = batch['pre_imgs']
         target_batch = batch['post_img']
-        # batch['acq_dts_float']
+        acq_dts_float = batch['acq_dts_float']
 
         train_batch = train_batch.to(device, non_blocking=True)
         target_batch = target_batch.to(device, non_blocking=True)
+        acq_dts_float = acq_dts_float.to(device, dtype=torch.float32, non_blocking=True)
 
         train_batch.clamp_(0, math.pi)
         target_batch.clamp_(0, math.pi)
 
+        # Extract temporal info before reshaping 
+        acq_dts_input = acq_dts_float[:, :-1]  # (B, T) - match pre_imgs length
+        
         # Data goes from Batch x Time X Channels X H x W -> (B h w) time channel ph pw, h = w = # of patches
         train_batch = rearrange(train_batch, 'b t c (h ph) (w pw) -> (b h w) t c ph pw', ph=input_size, pw=input_size)
         target_batch = rearrange(target_batch, 'b c (h ph) (w pw) -> (b h w) c ph pw', ph=input_size, pw=input_size)
@@ -97,13 +101,35 @@ def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accele
             
             mask = ~torch.isnan(target_batch)  # True where value is NOT NaN
 
-            pred_means, pred_logvars = model(train_batch)
-            loss = nll_gaussian(pred_means, pred_logvars, target_batch, pi=pi, mask = mask)
+            # Expand acq_dts_input to match the reshaped batch
+            B_orig = acq_dts_input.shape[0]
+            T = acq_dts_input.shape[1]
+            H_patches = W_patches = int(np.sqrt(train_batch.shape[0] // B_orig))
+            acq_dts_expanded = acq_dts_input.unsqueeze(1).unsqueeze(1).expand(B_orig, H_patches, W_patches, T)
+            acq_dts_expanded = acq_dts_expanded.reshape(-1, T)  # (B*H*W, T)
+            
+            pred_means, pred_logvars = model(train_batch, acq_dts_expanded)
+
+            # Debug NaN detection
+            if torch.isnan(pred_means).any():
+                print(f"NaN detected in pred_means at batch {batch_idx}")
+            if torch.isnan(pred_logvars).any():
+                print(f"NaN detected in pred_logvars at batch {batch_idx}")
+            if torch.isinf(pred_logvars).any():
+                print(f"Inf detected in pred_logvars at batch {batch_idx}")
+
+            loss = nll_gaussian(pred_means, pred_logvars, target_batch, mask=mask, pi = pi)
             mse_loss = F.mse_loss(pred_means, target_batch)
+            
+            # Debug loss values
+            if torch.isnan(loss):
+                print(f"NaN loss detected at batch {batch_idx}")
+            #if torch.isnan(mse_loss):
+            #    print(f"NaN MSE loss detected at batch {batch_idx}")
 
             optimizer.zero_grad()
             accelerator.backward(loss)  # Use accelerator's backward
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 10)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)  # Increased gradient clipping
             optimizer.step()
 
             # Gather losses from all processes for proper averaging
@@ -145,9 +171,30 @@ def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accele
                 naive_mse_loss = F.mse_loss(pre_image_mean, target_batch)
 
                 # Get prediction
-                pred_means, pred_logvars = model(train_batch)
-                loss = nll_gaussian(pred_means, pred_logvars, target_batch)
+                # Use the same temporal expansion as in training
+                B_orig = acq_dts_input.shape[0]
+                T = acq_dts_input.shape[1]
+                H_patches = W_patches = int(np.sqrt(train_batch.shape[0] // B_orig))
+                acq_dts_expanded = acq_dts_input.unsqueeze(1).unsqueeze(1).expand(B_orig, H_patches, W_patches, T)
+                acq_dts_expanded = acq_dts_expanded.reshape(-1, T)  # (B*H*W, T)
+                
+                pred_means, pred_logvars = model(train_batch, acq_dts_expanded)
+                
+                # Debug NaN detection in validation
+                if torch.isnan(pred_means).any():
+                    print(f"NaN detected in validation pred_means at batch {batch_idx}")
+                if torch.isnan(pred_logvars).any():
+                    print(f"NaN detected in validation pred_logvars at batch {batch_idx}")
+                
+                mask = ~torch.isnan(target_batch)
+                loss = nll_gaussian(pred_means, pred_logvars, target_batch, mask = mask)
                 mse_loss = F.mse_loss(pred_means, target_batch)
+                
+                # Debug validation loss values
+                if torch.isnan(loss):
+                    print(f"NaN validation loss detected at batch {batch_idx}")
+                if torch.isnan(mse_loss):
+                    print(f"NaN validation MSE loss detected at batch {batch_idx}")
 
                 # Gather losses from all processes for proper averaging
                 loss_gathered = accelerator.gather(loss.detach())
@@ -214,7 +261,7 @@ def custom_collate_fn(batch, T_max=21):
 
 def main():
     # Initialize accelerator first
-    accelerator = Accelerator(mixed_precision="fp16")
+    accelerator = Accelerator(mixed_precision="bf16")  # Use bfloat16 for better numerical stability
 
     # Setup warnings and debug info
     setup_warnings()
@@ -256,9 +303,9 @@ def main():
     # Load full dataset
     dist_dataset = DistS1Dataset(config['data']['data_dir_path'])
 
-    # Pick 2.5% of dataset
+    # Pick 75% of dataset
 
-    subset_size = int(0.025 * len(dist_dataset))
+    subset_size = int(0.75 * len(dist_dataset))
     generator = torch.Generator().manual_seed(42)
     subset_indices = torch.randperm(len(dist_dataset), generator=generator)[:subset_size].tolist()  # convert to ints
     small_dataset = Subset(dist_dataset, subset_indices)
@@ -494,7 +541,7 @@ def main():
 
             # Save checkpoint (only from main process)
             if epoch % config['train_config']['checkpoint_freq'] == 0:
-                checkpoint_path = Path(config['save_dir']['checkpoints']) / f'checkpoint_epoch_{epoch}_{now}_nan_param_masked_pad_param.pth'
+                checkpoint_path = Path(config['save_dir']['checkpoints']) / f'checkpoint_epoch_{epoch}_{now}_nan_param_masked_pad_param_75.pth'
                 save_checkpoint(
                     model, optimizer, scheduler, epoch, config, metrics_history, checkpoint_path, accelerator
                 )
@@ -502,30 +549,36 @@ def main():
                 # Save model (only from main process)
                 if accelerator.is_main_process:
                     model_path = (
-                        Path(config['save_dir']['models']) / f'{config["model_config"]["type"]}_{now}_epoch_{epoch}_nan_param_masked_pad_param.pth'
+                        Path(config['save_dir']['models']) / f'{config["model_config"]["type"]}_{now}_epoch_{epoch}_nan_param_masked_pad_param_75.pth'
                     )
                     torch.save(accelerator.get_state_dict(model), model_path)
 
-                    # --- New: Visualize and log 5 random test images ---
-                pred_mean, pred_log_var, target_batch = get_test_batch(test_loader, model, accelerator.device)
+                    #Visualize and log 10 random test images ---
+                pred_mean, pred_log_var, target_batch, pre_imgs, acq_dts_float = get_test_batch(
+                    test_loader, model, accelerator.device
+                )
 
                 batch_size = pred_mean.shape[0]
-                sample_indices = random.sample(range(batch_size), min(5, batch_size))
+                sample_indices = random.sample(range(batch_size), min(10, batch_size))
 
                 for idx in sample_indices:
                     # Pick predicted and ground truth for sample idx
-                    pred = pred_mean[idx]
-                    truth = target_batch[idx]
+                        pred = pred_mean[idx]
+                        pred_logvar = pred_log_var[idx]
+                        truth = target_batch[idx]
+                        pre_img_seq = pre_imgs[idx]  # (T, C, H, W)
+                        acq_seq = acq_dts_float[idx]  # (T+1,)
 
-                    ##TODO: Add date info to acquisition visuals
-                    show_prediction_vs_groundtruth_wandb(
-                        pred=pred,
-                        truth=truth,
-                        idx=idx,
-                        acq_dt_float=None,  # Or pass actual date if you extend get_test_batch to return it
-                        pad_val=-9999.0,
-                        wandb_run=wandb_manager  # uses current active run automatically
-                    )
+                        show_prediction_vs_groundtruth_wandb(
+                            pred=pred,
+                            log_var=pred_logvar,
+                            truth=truth,
+                            pre_imgs=pre_img_seq,         # <--- now available for plotting
+                            idx=idx,
+                            acq_dt_float=None,         # you can pass sequence of times too
+                            pad_val=-9999.0,
+                            wandb_manager=wandb_manager,
+                        )
 
             scheduler.step()
 
@@ -554,7 +607,7 @@ def main():
         # Save final checkpoint only if training completed normally (only from main process)
         if not killer.kill_now and 'epoch' in locals() and epoch == config['train_config']['num_epochs']:
             if accelerator.is_main_process:
-                final_checkpoint_path = Path(config['save_dir']['checkpoints']) / f'final_checkpoint_{now}_nan_param_masked_pad_param.pth'
+                final_checkpoint_path = Path(config['save_dir']['checkpoints']) / f'final_checkpoint_{now}_nan_param_masked_pad_param_75.pth'
                 save_checkpoint(
                     model, optimizer, scheduler, epoch, config, metrics_history, final_checkpoint_path, accelerator
                 )

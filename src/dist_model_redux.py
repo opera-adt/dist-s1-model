@@ -153,7 +153,7 @@ class SpatioTemporalTransformerRedux(nn.Module):
 
         # Generate temporal embeddings from acquisition dates
         # Replace any NaN values in acquisition dates with 0
-        acq_dts_clamped = torch.where(torch.isnan(acq_dts_clamped), torch.zeros_like(acq_dts_clamped), acq_dts_clamped)
+        acq_dts_clamped = torch.where(torch.isnan(acq_dts_float), torch.zeros_like(acq_dts_float), acq_dts_float)
         temporal_emb = self.temporal_embedding(acq_dts_clamped)  # (B, T, d_model)
         temporal_emb = temporal_emb.unsqueeze(2).expand(-1, -1, self.num_patches, -1)  # (B, T, P, d_model)
         

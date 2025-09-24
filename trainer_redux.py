@@ -303,9 +303,9 @@ def main():
     # Load full dataset
     dist_dataset = DistS1Dataset(config['data']['data_dir_path'])
 
-    # Pick 2.5% of dataset
+    # Pick 75% of dataset
 
-    subset_size = int(0.025 * len(dist_dataset))
+    subset_size = int(0.75 * len(dist_dataset))
     generator = torch.Generator().manual_seed(42)
     subset_indices = torch.randperm(len(dist_dataset), generator=generator)[:subset_size].tolist()  # convert to ints
     small_dataset = Subset(dist_dataset, subset_indices)

@@ -260,6 +260,70 @@ See the included notebooks for model application examples. This section is curre
 
 A separate repository for SAR data curation is planned. This is currently a work in progress.
 
+## How to Use The Benchmark Script
+
+The [benchmark script](benchmark.py) is designed to evaluate multiple models against multiple datasets. To use it, you need to correctly place your model files and configure the dataset paths within the script itself.
+
+---
+
+### 1. Adding Your Models
+
+The script automatically discovers models by scanning a specific folder, but requires a strict naming convention.
+
+- **Create a folder** for your models. By default, the script looks for a folder named `model_data`. You can change this by modifying the `MODELS_DIR` variable.
+- For each model you want to test, place two files inside this folder, named as follows:
+    1. A **`.yml` file** for configuration, named **`config_YOUR_MODEL_NAME.yml`**.
+    2. A **`.pth` file** for weights, named **`checkpoint_YOUR_MODEL_NAME.pth`**.
+- **Important:** The `YOUR_MODEL_NAME` part must be identical between the two files for them to be paired correctly.
+
+**Example Directory Structure:**
+
+    .
+    ├── benchmark_script.py
+    └── model_data/
+        ├── config_transformer_small.yml
+        ├── checkpoint_transformer_small.pth
+        ├── config_transformer_large.yml
+        └── checkpoint_transformer_large.pth
+
+---
+
+### 2. Configuring Your Datasets
+
+You must define the datasets you want to evaluate directly within the Python script.
+
+- **Locate the `DATASETS_TO_TEST` list** in the main section of the script.
+- **Add a dictionary** to this list for each dataset you want to test.
+
+Each dataset dictionary requires the following keys:
+
+- `"type"`: The loader type. Use `"dataset_v0"` for standard `.pt` files loaded with `torch.load` or `"dataset_v1"` for your `StreamShardDataset`.
+- `"name"`: A short, descriptive name for the dataset (e.g., "ERA5 Hourly"). This name will appear in the final report.
+- `"train_path"`: The full path to your training data file or directory.
+- `"test_path"`: The full path to your testing data file or directory.
+- `"seq_len"`: The native sequence length of the data in this dataset.
+
+**Example Configuration:**
+
+    # Define the datasets you want to test each model against.
+    DATASETS_TO_TEST = [
+        {
+            "type": "dataset_v0",
+            "name": "V0",
+            "train_path": "PytorchData/train_12813.pt",
+            "test_path": "Pytor/chData/test_3204.pt",
+            "seq_len": 10
+        },
+        {
+            "type": "dataset_v1",
+            "name": "V1",
+            "train_path": "opera-dist-ml/data/v1/",
+            "test_path": "opera-dist-ml/data/v1/",
+            "seq_len": 20
+        }
+    ]
+
+
 ## References
 
 - OPERA Disturbance Suite: https://www.jpl.nasa.gov/go/opera/products/dist-product-suite/

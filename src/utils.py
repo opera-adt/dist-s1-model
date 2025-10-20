@@ -164,8 +164,6 @@ def nll_gaussian(mean, logvar, value, mask=None, pi=None):
 
     return loss
 
-
-
 def nll_gaussian_stable(mean, variance, value, mask=None, pi=None, eps=1e-6):
     """
     Numerically stable negative log-likelihood of Gaussian with masking,
@@ -197,7 +195,8 @@ def nll_gaussian_stable(mean, variance, value, mask=None, pi=None, eps=1e-6):
 
     logvar = torch.log(variance)
     nll_element = (value - mean).pow(2) / variance + logvar + torch.log(2 * pi)
-    return loss
+    return nll_element
+
 
 def spatial_smoothness_loss(logvar, weight=0.1):
     """Penalize large differences between neighboring pixels"""
@@ -970,15 +969,10 @@ def save_checkpoint(model, optimizer, scheduler, epoch, config, metrics, checkpo
         print(f"Checkpoint saved: {checkpoint_path}")
 
 
-def load_checkpoint(checkpoint_path, model, optimizer, scheduler, accelerator):
+def load_checkpoint(checkpoint_path, model, accelerator):
     """Load training checkpoint."""
     checkpoint = torch.load(checkpoint_path, map_location=accelerator.device)
-    
     model.load_state_dict(checkpoint['model_state_dict'])
-    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-    scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
-    
-    return checkpoint['epoch'], checkpoint['metrics']
 
 
 def save_emergency_state(model, optimizer, scheduler, epoch, config, metrics_history, accelerator, reason="interruption"):
@@ -1317,6 +1311,59 @@ def run_final_validation(model, val_data, epoch, config, wandb_manager, accelera
     elif accelerator.is_main_process and config.get('validation', {}).get('enable_visual_validation', False):
         print("\nSkipping visual validation - no validation data loaded")
 
+
+def load_models_and_configs(directory_path: str) -> list:
+    """
+    Scans a directory for model configurations (e.g., config_STEM.yml) and
+    pairs them with their corresponding model weights (e.g., checkpoint_STEM.pth).
+    """
+    model_dir = Path(directory_path)
+    if not model_dir.is_dir():
+        print(f"Error: Model directory not found at '{directory_path}'")
+        return []
+
+    model_inventory = []
+    print(f"Scanning for models in: '{model_dir.resolve()}' using convention 'config_*.yml'...\n")
+
+    # Iterate through the config files first
+    for config_path in model_dir.glob('config_*.yml'):
+        # Extract the common part of the name
+        # e.g., 'config_8x8_in_32x32' -> '8x8_in_32x32'
+        config_stem = config_path.stem
+        common_part = config_stem.removeprefix('config_')
+
+        # Construct the expected model checkpoint filename
+        model_filename = f"checkpoint_{common_part}.pth"
+        model_path = config_path.with_name(model_filename)
+
+        # Check if the corresponding model file exists
+        if not model_path.is_file():
+            print(f"Warning: Found config '{config_path.name}' but no matching model '{model_path.name}'. Skipping.")
+            continue
+
+        # Try to load the YAML configuration
+        try:
+            with open(config_path, 'r') as f:
+                config_data = yaml.safe_load(f)
+            
+            # Use the common part of the name for reports
+            model_inventory.append({
+                'name': common_part,
+                'model_path': str(model_path),
+                'config_path': str(config_path),
+                'config': config_data
+            })
+            print(f"Paired and loaded: {config_path.name} -> {model_path.name}")
+
+        except yaml.YAMLError as e:
+            print(f"Error parsing YAML for '{config_path.name}': {e}")
+
+    if not model_inventory:
+        print("Warning: No matching model and config pairs were found.")
+
+    return model_inventory
+
+
 def show_prediction_vs_groundtruth_wandb(pred, truth, idx, acq_dt_float=None, pad_val=-9999.0, wandb_run=None):
     """
     Show predicted vs actual image side-by-side for a single sample.
@@ -1397,6 +1444,7 @@ def show_prediction_vs_groundtruth_wandb(pred, truth, idx, acq_dt_float=None, pa
     # Log to wandb (no save or show)
     wandb_run.log({f"prediction_vs_groundtruth/sample_{idx}": wandb.Image(fig)})
     plt.close(fig)
+
 
 def get_test_batch(test_loader, model, device):
     # Get a random batch from test_loader

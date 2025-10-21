@@ -938,8 +938,14 @@ def load_config(config_path):
     train_cfg['batch_size'] = int(train_cfg['batch_size'])
     train_cfg['num_epochs'] = int(train_cfg['num_epochs'])
     train_cfg['seed'] = int(train_cfg['seed'])
-    train_cfg['step_size'] = int(train_cfg['step_size'])
-    train_cfg['gamma'] = float(train_cfg['gamma'])
+    # StepLR scheduler params (optional, for backward compatibility)
+    if 'step_size' in train_cfg:
+        train_cfg['step_size'] = int(train_cfg['step_size'])
+    if 'gamma' in train_cfg:
+        train_cfg['gamma'] = float(train_cfg['gamma'])
+    # CosineAnnealingLR scheduler params (optional)
+    if 'eta_min' in train_cfg:
+        train_cfg['eta_min'] = float(train_cfg['eta_min'])
     train_cfg['checkpoint_freq'] = int(train_cfg['checkpoint_freq'])
     
     # Model config
@@ -1542,14 +1548,14 @@ def show_prediction_vs_groundtruth_wandb(
     plt.close(fig)
 
 
-def get_test_batch(test_loader, model, device):
+def get_test_batch(test_loader, model, device, config):
     # Get a random batch from test_loader
     with torch.no_grad():
         for batch in test_loader:
-            input_size = 16
+            input_size = config['model_config']['input_size']
 
             # (B, T, C, H, W)
-            pre_imgs = batch["pre_imgs"].to(device, non_blocking=True)  
+            pre_imgs = batch["pre_imgs"].to(device, non_blocking=True)
             target_batch = batch["post_img"].to(device, non_blocking=True)  # (B, C, H, W)
             acq_dts_float = batch["acq_dts_float"].to(device, non_blocking=True).float()  # (B, T+1)
 
@@ -1561,29 +1567,31 @@ def get_test_batch(test_loader, model, device):
             acq_dts_input = acq_dts_float[:, :-1]  # (B, T)
 
             B, T, C, H, W = pre_imgs.shape
-            P = (H // input_size) * (W // input_size)
+            H_patches = H // input_size
+            W_patches = W // input_size
 
             # Patchify
-            train_batch = rearrange(pre_imgs, 'b t c (h ph) (w pw) -> (b h w) t c ph pw', 
+            train_batch = rearrange(pre_imgs, 'b t c (h ph) (w pw) -> (b h w) t c ph pw',
                                     ph=input_size, pw=input_size)
-            target_batch = rearrange(target_batch, 'b c (h ph) (w pw) -> (b h w) c ph pw', 
+            target_batch = rearrange(target_batch, 'b c (h ph) (w pw) -> (b h w) c ph pw',
                                      ph=input_size, pw=input_size)
 
-            # Expand acq_dts_input across patches
-            acq_dts_input = acq_dts_input.unsqueeze(1).repeat(1, P, 1).view(B * P, T)
+            # Expand acq_dts_input across patches (match training code exactly)
+            acq_dts_expanded = acq_dts_input.unsqueeze(1).unsqueeze(1).expand(B, H_patches, W_patches, T)
+            acq_dts_expanded = acq_dts_expanded.reshape(-1, T)  # (B*H_patches*W_patches, T)
 
             # Forward pass
-            pred_mean, pred_log_var = model(train_batch, acq_dts_input)
+            pred_mean, pred_log_var = model(train_batch, acq_dts_expanded)
 
             # Reconstruct to (B, C, H, W)
-            pred_mean = rearrange(pred_mean, '(b h w) c ph pw -> b c (h ph) (w pw)', 
-                                  b=B, h=H // input_size, w=W // input_size, 
+            pred_mean = rearrange(pred_mean, '(b h w) c ph pw -> b c (h ph) (w pw)',
+                                  b=B, h=H_patches, w=W_patches,
                                   ph=input_size, pw=input_size)
-            pred_log_var = rearrange(pred_log_var, '(b h w) c ph pw -> b c (h ph) (w pw)', 
-                                     b=B, h=H // input_size, w=W // input_size, 
+            pred_log_var = rearrange(pred_log_var, '(b h w) c ph pw -> b c (h ph) (w pw)',
+                                     b=B, h=H_patches, w=W_patches,
                                      ph=input_size, pw=input_size)
-            target_batch = rearrange(target_batch, '(b h w) c ph pw -> b c (h ph) (w pw)', 
-                                     b=B, h=H // input_size, w=W // input_size, 
+            target_batch = rearrange(target_batch, '(b h w) c ph pw -> b c (h ph) (w pw)',
+                                     b=B, h=H_patches, w=W_patches,
                                      ph=input_size, pw=input_size)
 
             break  # just one batch

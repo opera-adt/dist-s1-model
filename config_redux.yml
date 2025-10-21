@@ -1,8 +1,8 @@
 # WandB settings
-use_wandb: false
-wandb_entity: null  # Your organization/team name (e.g., "my-org" or "username")
-wandb_project: null
-wandb_run_name: null  # Will auto-generate if null
+use_wandb: True
+wandb_entity: cmarshak-nasa-jet-propulsion-laboratory  # Your organization/team name (e.g., "my-org" or "username")
+wandb_project: spatiotemporal-transformer-v2
+wandb_run_name: NaNs Parameter & Masked, Padding Parameter, Date Encoding, 32 chip, 50% data # Will auto-generate if null
 resume_wandb_run_id: null  # Set to resume a specific wandb run
 
 # Resume training
@@ -10,13 +10,14 @@ resume_checkpoint: null  # Path to checkpoint file to resume from
 
 # Data paths
 data:
-  data_dir_path: "../../dist-s1-data-updated/"  # path to directory with dataset_samples_npz and npz_samples
-
+  data_dir_path: "/scratch/opera-dist-ml/dist-s1-data-updated/"  # path to directory with dataset_samples_npz and npz_samples
+  #data_dir_path: "/u/aurora-r0/jmauro"  # path to directory with dataset_samples_npz and npz_samples
+  
 # Model configuration
 model_config:
   type: "transformer"
   patch_size: 8
-  input_size: 16
+  input_size: 32
   data_dim: 128  # 2*patch_size*patch_size
   d_model: 256
   nhead: 4
@@ -28,13 +29,17 @@ model_config:
 
 # Training configuration
 train_config:
-  batch_size: 20
-  num_epochs: 100
-  input_size: 16
+  batch_size: 2
+  num_epochs: 200
+  input_size: 32
   learning_rate: 0.0001  # 1e-4
   seed: 177
-  step_size: 25  # For scheduler
-  gamma: 0.1  # For scheduler
+  # Old StepLR scheduler params:
+  # step_size: 25  # For scheduler
+  # gamma: 0.1  # For scheduler
+  # New CosineAnnealingLR scheduler params:
+  # T_max: 200  # num_epochs (automatically set in code)
+  eta_min: 0.000001  # 1e-6 - minimum learning rate
   checkpoint_freq: 5  # Save checkpoint every N epochs
 
 # Save directories
@@ -45,7 +50,7 @@ save_dir:
 
 # Validation settings
 validation:
-  enable_visual_validation: true
+  enable_visual_validation: false
   
   blend_mode: 'gaussian'
   apply_smoothing: true      # Enable post-processing

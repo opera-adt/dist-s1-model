@@ -35,11 +35,11 @@ from src.utils import (
     show_prediction_vs_groundtruth_wandb, 
     get_test_batch
 )
-from torch.optim.lr_scheduler import StepLR
+from torch.optim.lr_scheduler import StepLR, CosineAnnealingLR
 from torch.utils.data import DataLoader, random_split
 
 
-def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accelerator, train_batch=True):
+def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accelerator, config, train_batch=True):
     """Perform one epoch of training by looping through the dataset once."""
     if train_batch:
         model.train()
@@ -61,11 +61,11 @@ def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accele
                 print(f'\nInterrupted at batch {batch_idx}/{num_batches}')
             break
 
-        if batch_idx % 50 == 0 and accelerator.is_main_process:
+        if batch_idx % 10 == 0 and accelerator.is_main_process:
             print(f'Batch {batch_idx}/{num_batches}')
 
-        # Get input size from config or use default
-        input_size = getattr(run_epoch_tf, '_input_size', 16)
+        # Get input size from config
+        input_size = config['model_config']['input_size']
 
         train_batch = batch['pre_imgs']
         target_batch = batch['post_img']
@@ -78,9 +78,14 @@ def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accele
         train_batch.clamp_(0, math.pi)
         target_batch.clamp_(0, math.pi)
 
-        # Extract temporal info before reshaping 
+        # Extract temporal info before reshaping
         acq_dts_input = acq_dts_float[:, :-1]  # (B, T) - match pre_imgs length
-        
+
+        # Calculate patch dimensions from original data before reshaping
+        B_orig, T, C, H_orig, W_orig = train_batch.shape
+        H_patches = H_orig // input_size
+        W_patches = W_orig // input_size
+
         # Data goes from Batch x Time X Channels X H x W -> (B h w) time channel ph pw, h = w = # of patches
         train_batch = rearrange(train_batch, 'b t c (h ph) (w pw) -> (b h w) t c ph pw', ph=input_size, pw=input_size)
         target_batch = rearrange(target_batch, 'b c (h ph) (w pw) -> (b h w) c ph pw', ph=input_size, pw=input_size)
@@ -102,9 +107,7 @@ def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accele
             mask = ~torch.isnan(target_batch)  # True where value is NOT NaN
 
             # Expand acq_dts_input to match the reshaped batch
-            B_orig = acq_dts_input.shape[0]
             T = acq_dts_input.shape[1]
-            H_patches = W_patches = int(np.sqrt(train_batch.shape[0] // B_orig))
             acq_dts_expanded = acq_dts_input.unsqueeze(1).unsqueeze(1).expand(B_orig, H_patches, W_patches, T)
             acq_dts_expanded = acq_dts_expanded.reshape(-1, T)  # (B*H*W, T)
             
@@ -172,9 +175,7 @@ def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accele
 
                 # Get prediction
                 # Use the same temporal expansion as in training
-                B_orig = acq_dts_input.shape[0]
                 T = acq_dts_input.shape[1]
-                H_patches = W_patches = int(np.sqrt(train_batch.shape[0] // B_orig))
                 acq_dts_expanded = acq_dts_input.unsqueeze(1).unsqueeze(1).expand(B_orig, H_patches, W_patches, T)
                 acq_dts_expanded = acq_dts_expanded.reshape(-1, T)  # (B*H*W, T)
                 
@@ -305,7 +306,7 @@ def main():
 
     # Pick 2.5% of dataset
 
-    subset_size = int(0.025 * len(dist_dataset))
+    subset_size = int(0.05 * len(dist_dataset))
     generator = torch.Generator().manual_seed(42)
     subset_indices = torch.randperm(len(dist_dataset), generator=generator)[:subset_size].tolist()  # convert to ints
     small_dataset = Subset(dist_dataset, subset_indices)
@@ -349,7 +350,10 @@ def main():
 
     # Initialize optimizer and scheduler
     optimizer = torch.optim.Adam(model.parameters(), lr=config['train_config']['learning_rate'])
-    scheduler = StepLR(optimizer, step_size=config['train_config']['step_size'], gamma=config['train_config']['gamma'])
+    # Old scheduler: StepLR with step_size=25, gamma=0.1
+    # scheduler = StepLR(optimizer, step_size=config['train_config']['step_size'], gamma=config['train_config']['gamma'])
+    # New scheduler: CosineAnnealingLR
+    scheduler = CosineAnnealingLR(optimizer, T_max=config['train_config']['num_epochs'], eta_min=config['train_config'].get('eta_min', 1e-6))
 
     # Prepare everything with accelerator
     model, optimizer, train_loader, test_loader, scheduler = accelerator.prepare(
@@ -390,14 +394,8 @@ def main():
         )
         start_epoch += 1
 
-    # Get input_size from config or use default
-    input_size = config['model_config']['input_size']
-    
-    # Store input_size for run_epoch_tf to access
-    run_epoch_tf.input_size = input_size
-
     if accelerator.is_main_process:
-        print(f'Using input_size: {input_size}')
+        print(f'Using input_size: {config["model_config"]["input_size"]}')
 
     # Training setup
     pi = torch.FloatTensor([np.pi]).to(accelerator.device)
@@ -450,7 +448,7 @@ def main():
 
             # Train
             train_loss, train_mse, _, _ = run_epoch_tf(
-                train_loader, model, optimizer, accelerator.device, pi, epoch, killer, accelerator, train_batch=True
+                train_loader, model, optimizer, accelerator.device, pi, epoch, killer, accelerator, config, train_batch=True
             )
 
             # Check again after training epoch
@@ -477,7 +475,7 @@ def main():
 
             # Test
             test_loss, test_mse, test_naive_nll, test_naive_mse = run_epoch_tf(
-                test_loader, model, optimizer, accelerator.device, pi, epoch, killer, accelerator, train_batch=False
+                test_loader, model, optimizer, accelerator.device, pi, epoch, killer, accelerator, config, train_batch=False
             )
 
             # Update metrics history (only on main process to avoid duplication)
@@ -541,7 +539,7 @@ def main():
 
             # Save checkpoint (only from main process)
             if epoch % config['train_config']['checkpoint_freq'] == 0:
-                checkpoint_path = Path(config['save_dir']['checkpoints']) / f'checkpoint_epoch_{epoch}_{now}_nan_param_masked_pad_param_75.pth'
+                checkpoint_path = Path(config['save_dir']['checkpoints']) / f'checkpoint_epoch_{epoch}_{now}_nan_param_masked_pad_param_32_chip_50percentdata.pth'
                 save_checkpoint(
                     model, optimizer, scheduler, epoch, config, metrics_history, checkpoint_path, accelerator
                 )
@@ -549,13 +547,13 @@ def main():
                 # Save model (only from main process)
                 if accelerator.is_main_process:
                     model_path = (
-                        Path(config['save_dir']['models']) / f'{config["model_config"]["type"]}_{now}_epoch_{epoch}_nan_param_masked_pad_param_75.pth'
+                        Path(config['save_dir']['models']) / f'{config["model_config"]["type"]}_{now}_epoch_{epoch}_nan_param_masked_pad_param_32_chip_50percentdata.pth'
                     )
                     torch.save(accelerator.get_state_dict(model), model_path)
 
                     #Visualize and log 10 random test images ---
                 pred_mean, pred_log_var, target_batch, pre_imgs, acq_dts_float = get_test_batch(
-                    test_loader, model, accelerator.device
+                    test_loader, model, accelerator.device, config
                 )
 
                 batch_size = pred_mean.shape[0]
@@ -607,7 +605,7 @@ def main():
         # Save final checkpoint only if training completed normally (only from main process)
         if not killer.kill_now and 'epoch' in locals() and epoch == config['train_config']['num_epochs']:
             if accelerator.is_main_process:
-                final_checkpoint_path = Path(config['save_dir']['checkpoints']) / f'final_checkpoint_{now}_nan_param_masked_pad_param_75.pth'
+                final_checkpoint_path = Path(config['save_dir']['checkpoints']) / f'final_checkpoint_{now}_nan_param_masked_pad_param_32_chip_50percentdata.pth'
                 save_checkpoint(
                     model, optimizer, scheduler, epoch, config, metrics_history, final_checkpoint_path, accelerator
                 )

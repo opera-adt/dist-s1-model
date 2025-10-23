@@ -2,7 +2,7 @@
 use_wandb: True
 wandb_entity: cmarshak-nasa-jet-propulsion-laboratory  # Your organization/team name (e.g., "my-org" or "username")
 wandb_project: spatiotemporal-transformer-v2
-wandb_run_name: NaNs Parameter & Masked, Padding Parameter, Date Encoding, 32 chip, 10% data, db Transform # Will auto-generate if null
+wandb_run_name: NaNs Parameter & Masked, Padding Parameter, Date Encoding, 32 chip, 10% data, db Transform Updated # Will auto-generate if null
 resume_wandb_run_id: null  # Set to resume a specific wandb run
 
 # Resume training

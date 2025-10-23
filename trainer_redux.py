@@ -39,6 +39,38 @@ from torch.optim.lr_scheduler import StepLR, CosineAnnealingLR
 from torch.utils.data import DataLoader, random_split
 
 
+def convert_to_db(data, epsilon=1e-10, db_min=-30.0, db_max=10.0, pad_value=-9999.0):
+    """
+    Convert SAR intensity data to dB scale while preserving padding and NaN values.
+
+    Args:
+        data: Input tensor (intensity values)
+        epsilon: Small value to avoid log(0)
+        db_min: Minimum dB value for clipping
+        db_max: Maximum dB value for clipping
+        pad_value: Padding value to preserve (default: -9999.0)
+
+    Returns:
+        Data in dB scale, clipped to [db_min, db_max], with padding/NaN preserved
+    """
+    # Create masks for padding values and NaNs
+    pad_mask = (data == pad_value)
+    nan_mask = torch.isnan(data)
+
+    # Add epsilon to avoid log(0), then convert to dB
+    # Using 10*log10 for intensity/power data
+    data_db = 10.0 * torch.log10(torch.abs(data) + epsilon)
+
+    # Clip to valid dB range
+    data_db = torch.clamp(data_db, db_min, db_max)
+
+    # Restore padding values and NaNs
+    data_db = torch.where(pad_mask, torch.tensor(pad_value, dtype=data_db.dtype, device=data_db.device), data_db)
+    data_db = torch.where(nan_mask, torch.tensor(float('nan'), dtype=data_db.dtype, device=data_db.device), data_db)
+
+    return data_db
+
+
 def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accelerator, config, train_batch=True):
     """Perform one epoch of training by looping through the dataset once."""
     if train_batch:
@@ -75,8 +107,18 @@ def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accele
         target_batch = target_batch.to(device, non_blocking=True)
         acq_dts_float = acq_dts_float.to(device, dtype=torch.float32, non_blocking=True)
 
-        train_batch.clamp_(0, math.pi)
-        target_batch.clamp_(0, math.pi)
+        # Apply dB conversion if enabled in config
+        if config['train_config'].get('use_db_conversion', False):
+            db_epsilon = float(config['train_config'].get('db_epsilon', 1e-10))
+            db_min = float(config['train_config'].get('db_min', -30.0))
+            db_max = float(config['train_config'].get('db_max', 10.0))
+
+            train_batch = convert_to_db(train_batch, epsilon=db_epsilon, db_min=db_min, db_max=db_max)
+            target_batch = convert_to_db(target_batch, epsilon=db_epsilon, db_min=db_min, db_max=db_max)
+        else:
+            # Original clamping for non-dB data
+            train_batch.clamp_(0, math.pi)
+            target_batch.clamp_(0, math.pi)
 
         # Extract temporal info before reshaping
         acq_dts_input = acq_dts_float[:, :-1]  # (B, T) - match pre_imgs length
@@ -123,12 +165,16 @@ def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accele
 
             loss = nll_gaussian(pred_means, pred_logvars, target_batch, mask=mask, pi = pi)
             mse_loss = F.mse_loss(pred_means, target_batch)
-            
-            # Debug loss values
+
+            # Debug loss values - print every batch
+            print(f"Batch {batch_idx}: NLL Loss = {loss.item():.6f}, MSE Loss = {mse_loss.item():.6f}")
             if torch.isnan(loss):
-                print(f"NaN loss detected at batch {batch_idx}")
-            #if torch.isnan(mse_loss):
-            #    print(f"NaN MSE loss detected at batch {batch_idx}")
+                print(f"!!! NaN NLL loss detected at batch {batch_idx} !!!")
+                print(f"pred_means stats: min={pred_means.min()}, max={pred_means.max()}, mean={pred_means.mean()}")
+                print(f"pred_logvars stats: min={pred_logvars.min()}, max={pred_logvars.max()}, mean={pred_logvars.mean()}")
+                print(f"target_batch stats: min={target_batch[mask].min()}, max={target_batch[mask].max()}")
+            if torch.isnan(mse_loss):
+                print(f"!!! NaN MSE loss detected at batch {batch_idx} !!!")
 
             optimizer.zero_grad()
             accelerator.backward(loss)  # Use accelerator's backward
@@ -304,9 +350,9 @@ def main():
     # Load full dataset
     dist_dataset = DistS1Dataset(config['data']['data_dir_path'])
 
-    # Pick 2.5% of dataset
+    # Pick 10% of dataset
 
-    subset_size = int(0.05 * len(dist_dataset))
+    subset_size = int(0.02 * len(dist_dataset))
     generator = torch.Generator().manual_seed(42)
     subset_indices = torch.randperm(len(dist_dataset), generator=generator)[:subset_size].tolist()  # convert to ints
     small_dataset = Subset(dist_dataset, subset_indices)

@@ -1437,10 +1437,13 @@ def show_prediction_vs_groundtruth_wandb(
     std_map = np.sqrt(np.exp(log_var))  # std from log var
     num_channels = pred.shape[0]
 
-    # Mask prediction where truth is NaN
+    # Mask prediction and std_map where truth is NaN
     nan_mask = np.isnan(truth)
     pred_masked = pred.copy()
     pred_masked[nan_mask] = np.nan
+
+    std_map_masked = std_map.copy()
+    std_map_masked[nan_mask] = np.nan
 
     # Compute vmin/vmax per channel
     vmin_list, vmax_list = [], []
@@ -1457,7 +1460,7 @@ def show_prediction_vs_groundtruth_wandb(
             vmin_list.append(np.percentile(ch_data, 2))
             vmax_list.append(np.percentile(ch_data, 98))
 
-        std_ch_data = std_map[c].flatten()
+        std_ch_data = std_map_masked[c].flatten()
         std_ch_data = std_ch_data[~np.isnan(std_ch_data)]
         if std_ch_data.size == 0:
             std_vmin_list.append(0.0); std_vmax_list.append(1.0)
@@ -1511,7 +1514,7 @@ def show_prediction_vs_groundtruth_wandb(
         axes[3, c].axis("off")
 
         # Std Dev
-        im_std = axes[4, c].imshow(std_map[c], cmap="magma",
+        im_std = axes[4, c].imshow(std_map_masked[c], cmap="magma",
                                    vmin=std_vmin_list[c], vmax=std_vmax_list[c])
         axes[4, c].set_title(f"Std Dev - {channel_name}", fontsize=9)
         axes[4, c].axis("off")
@@ -1559,9 +1562,19 @@ def get_test_batch(test_loader, model, device, config):
             target_batch = batch["post_img"].to(device, non_blocking=True)  # (B, C, H, W)
             acq_dts_float = batch["acq_dts_float"].to(device, non_blocking=True).float()  # (B, T+1)
 
-            # Clamp values like in training
-            pre_imgs.clamp_(0, math.pi)
-            target_batch.clamp_(0, math.pi)
+            # Apply dB conversion if enabled in config (must match training!)
+            if config['train_config'].get('use_db_conversion', False):
+                from trainer_redux import convert_to_db
+                db_epsilon = float(config['train_config'].get('db_epsilon', 1e-10))
+                db_min = float(config['train_config'].get('db_min', -30.0))
+                db_max = float(config['train_config'].get('db_max', 10.0))
+
+                pre_imgs = convert_to_db(pre_imgs, epsilon=db_epsilon, db_min=db_min, db_max=db_max)
+                target_batch = convert_to_db(target_batch, epsilon=db_epsilon, db_min=db_min, db_max=db_max)
+            else:
+                # Original clamping for non-dB data
+                pre_imgs.clamp_(0, math.pi)
+                target_batch.clamp_(0, math.pi)
 
             # Cut acq_dts_float to match input length
             acq_dts_input = acq_dts_float[:, :-1]  # (B, T)

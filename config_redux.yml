@@ -2,7 +2,7 @@
 use_wandb: True
 wandb_entity: cmarshak-nasa-jet-propulsion-laboratory  # Your organization/team name (e.g., "my-org" or "username")
 wandb_project: spatiotemporal-transformer-v2
-wandb_run_name: NaNs Parameter & Masked, Padding Parameter, Date Encoding, 32 chip, 50% data # Will auto-generate if null
+wandb_run_name: NaNs Parameter & Masked, Padding Parameter, Date Encoding, 32 chip, 10% data, db Transform # Will auto-generate if null
 resume_wandb_run_id: null  # Set to resume a specific wandb run
 
 # Resume training
@@ -41,6 +41,11 @@ train_config:
   # T_max: 200  # num_epochs (automatically set in code)
   eta_min: 0.000001  # 1e-6 - minimum learning rate
   checkpoint_freq: 5  # Save checkpoint every N epochs
+  # dB conversion settings
+  use_db_conversion: true  # Enable dB scale conversion for SAR data
+  db_epsilon: 1e-10  # Small value to avoid log(0)
+  db_min: -30.0  # Minimum dB value for clipping
+  db_max: 10.0  # Maximum dB value for clipping
 
 # Save directories
 save_dir:

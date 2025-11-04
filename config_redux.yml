@@ -2,7 +2,7 @@
 use_wandb: True
 wandb_entity: cmarshak-nasa-jet-propulsion-laboratory  # Your organization/team name (e.g., "my-org" or "username")
 wandb_project: spatiotemporal-transformer-v2
-wandb_run_name: NaNs Parameter & Masked, Padding Parameter, Date Encoding, 32 chip, 10% data, db Transform Updated # Will auto-generate if null
+wandb_run_name: WarmupCosine - 32 chip, 2% data, db Transform # Will auto-generate if null
 resume_wandb_run_id: null  # Set to resume a specific wandb run
 
 # Resume training
@@ -32,14 +32,37 @@ train_config:
   batch_size: 2
   num_epochs: 200
   input_size: 32
-  learning_rate: 0.0001  # 1e-4
+  learning_rate: 0.00015 # 1e-4
   seed: 177
-  # Old StepLR scheduler params:
-  # step_size: 25  # For scheduler
-  # gamma: 0.1  # For scheduler
-  # New CosineAnnealingLR scheduler params:
-  # T_max: 200  # num_epochs (automatically set in code)
-  eta_min: 0.000001  # 1e-6 - minimum learning rate
+
+  # Scheduler configuration
+  scheduler_type: "WarmupCosine"  # Options: "StepLR", "CosineAnnealingLR", "OneCycleLR", "CosineAnnealingWarmRestarts", "ReduceLROnPlateau", "WarmupCosine"
+
+  # StepLR scheduler params:
+  step_size: 25  # For StepLR - decay after N epochs
+  gamma: 0.1  # For StepLR - multiply LR by gamma
+
+  # CosineAnnealingLR scheduler params:
+  eta_min: 0.000001  # 1e-6 - minimum learning rate (for CosineAnnealingLR, CosineAnnealingWarmRestarts, and ReduceLROnPlateau)
+
+  # OneCycleLR scheduler params:
+  max_lr: 0.001  # Peak learning rate for OneCycleLR
+  pct_start: 0.3  # Percentage of cycle spent increasing LR
+  div_factor: 25.0  # initial_lr = max_lr / div_factor
+  final_div_factor: 10000.0  # min_lr = initial_lr / final_div_factor
+
+  # CosineAnnealingWarmRestarts scheduler params:
+  T_0: 10  # Number of epochs for first restart
+  T_mult: 2  # Multiplication factor for period after each restart
+
+  # ReduceLROnPlateau scheduler params:
+  plateau_factor: 0.5  # Multiply LR by this factor when reducing (0.5 = reduce by 50%)
+  plateau_patience: 10  # Number of epochs with no improvement before reducing LR
+
+  # WarmupCosine scheduler params:
+  warmup_epochs: 5  # Number of epochs for linear warmup phase
+  min_lr_ratio: 0.0  # Minimum LR as a ratio of base LR (0.0 = decay to 0, 0.1 = decay to 10% of base LR)
+
   checkpoint_freq: 5  # Save checkpoint every N epochs
   # dB conversion settings
   use_db_conversion: true  # Enable dB scale conversion for SAR data

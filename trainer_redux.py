@@ -35,8 +35,39 @@ from src.utils import (
     show_prediction_vs_groundtruth_wandb, 
     get_test_batch
 )
-from torch.optim.lr_scheduler import StepLR, CosineAnnealingLR
+from torch.optim.lr_scheduler import StepLR, CosineAnnealingLR, OneCycleLR, CosineAnnealingWarmRestarts, ReduceLROnPlateau, LambdaLR
 from torch.utils.data import DataLoader, random_split
+
+
+def get_cosine_schedule_with_warmup(optimizer, num_warmup_steps, num_training_steps, min_lr_ratio=0.0):
+    """
+    Create a learning rate scheduler with linear warmup and cosine decay.
+
+    This is the standard scheduler used for transformer models. It linearly increases
+    the learning rate during warmup, then decays it following a cosine curve.
+
+    Args:
+        optimizer: The optimizer to schedule
+        num_warmup_steps: Number of steps for the warmup phase
+        num_training_steps: Total number of training steps
+        min_lr_ratio: Minimum learning rate as a ratio of the base LR (default: 0.0)
+
+    Returns:
+        LambdaLR scheduler
+    """
+    def lr_lambda(current_step):
+        # Linear warmup
+        if current_step < num_warmup_steps:
+            return float(current_step) / float(max(1, num_warmup_steps))
+
+        # Cosine decay
+        progress = float(current_step - num_warmup_steps) / float(max(1, num_training_steps - num_warmup_steps))
+        cosine_decay = 0.5 * (1.0 + math.cos(math.pi * progress))
+
+        # Scale between min_lr_ratio and 1.0
+        return max(min_lr_ratio, cosine_decay)
+
+    return LambdaLR(optimizer, lr_lambda)
 
 
 def convert_to_db(data, epsilon=1e-10, db_min=-30.0, db_max=10.0, pad_value=-9999.0):
@@ -71,9 +102,9 @@ def convert_to_db(data, epsilon=1e-10, db_min=-30.0, db_max=10.0, pad_value=-999
     return data_db
 
 
-def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accelerator, config, train_batch=True):
+def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accelerator, config, scheduler=None, scheduler_type=None, is_training=True):
     """Perform one epoch of training by looping through the dataset once."""
-    if train_batch:
+    if is_training:
         model.train()
     else:
         model.eval()
@@ -180,6 +211,10 @@ def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accele
             accelerator.backward(loss)  # Use accelerator's backward
             torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)  # Increased gradient clipping
             optimizer.step()
+
+            # Step scheduler per batch for OneCycleLR and WarmupCosine
+            if is_training and scheduler is not None and scheduler_type in ['OneCycleLR', 'WarmupCosine']:
+                scheduler.step()
 
             # Gather losses from all processes for proper averaging
             loss_gathered = accelerator.gather(loss.detach())
@@ -350,7 +385,7 @@ def main():
     # Load full dataset
     dist_dataset = DistS1Dataset(config['data']['data_dir_path'])
 
-    # Pick 10% of dataset
+    # Pick 20% of dataset
 
     subset_size = int(0.02 * len(dist_dataset))
     generator = torch.Generator().manual_seed(42)
@@ -396,10 +431,85 @@ def main():
 
     # Initialize optimizer and scheduler
     optimizer = torch.optim.Adam(model.parameters(), lr=config['train_config']['learning_rate'])
-    # Old scheduler: StepLR with step_size=25, gamma=0.1
-    # scheduler = StepLR(optimizer, step_size=config['train_config']['step_size'], gamma=config['train_config']['gamma'])
-    # New scheduler: CosineAnnealingLR
-    scheduler = CosineAnnealingLR(optimizer, T_max=config['train_config']['num_epochs'], eta_min=config['train_config'].get('eta_min', 1e-6))
+
+    # Choose scheduler based on config
+    scheduler_type = config['train_config'].get('scheduler_type', 'StepLR')
+
+    if scheduler_type == 'StepLR':
+        scheduler = StepLR(
+            optimizer,
+            step_size=config['train_config']['step_size'],
+            gamma=config['train_config']['gamma']
+        )
+        if accelerator.is_main_process:
+            print(f"Using StepLR scheduler with step_size={config['train_config']['step_size']}, gamma={config['train_config']['gamma']}")
+
+    elif scheduler_type == 'CosineAnnealingLR':
+        scheduler = CosineAnnealingLR(
+            optimizer,
+            T_max=config['train_config']['num_epochs'],
+            eta_min=config['train_config'].get('eta_min', 1e-6)
+        )
+        if accelerator.is_main_process:
+            print(f"Using CosineAnnealingLR scheduler with T_max={config['train_config']['num_epochs']}, eta_min={config['train_config'].get('eta_min', 1e-6)}")
+
+    elif scheduler_type == 'OneCycleLR':
+        # OneCycleLR needs total steps, not epochs
+        steps_per_epoch = len(train_loader)
+        total_steps = steps_per_epoch * config['train_config']['num_epochs']
+        scheduler = OneCycleLR(
+            optimizer,
+            max_lr=config['train_config'].get('max_lr', 0.001),
+            total_steps=total_steps,
+            pct_start=config['train_config'].get('pct_start', 0.3),
+            div_factor=config['train_config'].get('div_factor', 25.0),
+            final_div_factor=config['train_config'].get('final_div_factor', 10000.0),
+            anneal_strategy='cos'
+        )
+        if accelerator.is_main_process:
+            print(f"Using OneCycleLR scheduler with max_lr={config['train_config'].get('max_lr', 0.001)}, total_steps={total_steps}")
+
+    elif scheduler_type == 'CosineAnnealingWarmRestarts':
+        scheduler = CosineAnnealingWarmRestarts(
+            optimizer,
+            T_0=config['train_config'].get('T_0', 10),
+            T_mult=config['train_config'].get('T_mult', 2),
+            eta_min=config['train_config'].get('eta_min', 1e-6)
+        )
+        if accelerator.is_main_process:
+            print(f"Using CosineAnnealingWarmRestarts scheduler with T_0={config['train_config'].get('T_0', 10)}, T_mult={config['train_config'].get('T_mult', 2)}")
+
+    elif scheduler_type == 'ReduceLROnPlateau':
+        scheduler = ReduceLROnPlateau(
+            optimizer,
+            mode='min',  # Minimize validation loss
+            factor=config['train_config'].get('plateau_factor', 0.5),
+            patience=config['train_config'].get('plateau_patience', 10),
+            min_lr=config['train_config'].get('eta_min', 1e-7),
+            verbose=True
+        )
+        if accelerator.is_main_process:
+            print(f"Using ReduceLROnPlateau scheduler with factor={config['train_config'].get('plateau_factor', 0.5)}, patience={config['train_config'].get('plateau_patience', 10)}")
+
+    elif scheduler_type == 'WarmupCosine':
+        # WarmupCosine needs total steps, not epochs
+        steps_per_epoch = len(train_loader)
+        total_steps = steps_per_epoch * config['train_config']['num_epochs']
+        warmup_epochs = config['train_config'].get('warmup_epochs', 5)
+        warmup_steps = warmup_epochs * steps_per_epoch
+        min_lr_ratio = config['train_config'].get('min_lr_ratio', 0.0)
+
+        scheduler = get_cosine_schedule_with_warmup(
+            optimizer,
+            num_warmup_steps=warmup_steps,
+            num_training_steps=total_steps,
+            min_lr_ratio=min_lr_ratio
+        )
+        if accelerator.is_main_process:
+            print(f"Using WarmupCosine scheduler with warmup_epochs={warmup_epochs}, total_steps={total_steps}, min_lr_ratio={min_lr_ratio}")
+
+    else:
+        raise ValueError(f"Unknown scheduler type: {scheduler_type}. Choose from: StepLR, CosineAnnealingLR, OneCycleLR, CosineAnnealingWarmRestarts, ReduceLROnPlateau, WarmupCosine")
 
     # Prepare everything with accelerator
     model, optimizer, train_loader, test_loader, scheduler = accelerator.prepare(
@@ -494,7 +604,8 @@ def main():
 
             # Train
             train_loss, train_mse, _, _ = run_epoch_tf(
-                train_loader, model, optimizer, accelerator.device, pi, epoch, killer, accelerator, config, train_batch=True
+                train_loader, model, optimizer, accelerator.device, pi, epoch, killer, accelerator, config,
+                scheduler=scheduler, scheduler_type=scheduler_type, is_training=True
             )
 
             # Check again after training epoch
@@ -521,7 +632,8 @@ def main():
 
             # Test
             test_loss, test_mse, test_naive_nll, test_naive_mse = run_epoch_tf(
-                test_loader, model, optimizer, accelerator.device, pi, epoch, killer, accelerator, config, train_batch=False
+                test_loader, model, optimizer, accelerator.device, pi, epoch, killer, accelerator, config,
+                scheduler=None, scheduler_type=None, is_training=False
             )
 
             # Update metrics history (only on main process to avoid duplication)
@@ -585,7 +697,7 @@ def main():
 
             # Save checkpoint (only from main process)
             if epoch % config['train_config']['checkpoint_freq'] == 0:
-                checkpoint_path = Path(config['save_dir']['checkpoints']) / f'checkpoint_epoch_{epoch}_{now}_nan_param_masked_pad_param_32_chip_50percentdata_datadB_no_date.pth'
+                checkpoint_path = Path(config['save_dir']['checkpoints']) / f'checkpoint_epoch_{epoch}_{now}_{scheduler_type}_32chip_2pctdata_datadB.pth'
                 save_checkpoint(
                     model, optimizer, scheduler, epoch, config, metrics_history, checkpoint_path, accelerator
                 )
@@ -593,7 +705,7 @@ def main():
                 # Save model (only from main process)
                 if accelerator.is_main_process:
                     model_path = (
-                        Path(config['save_dir']['models']) / f'{config["model_config"]["type"]}_{now}_epoch_{epoch}_nan_param_masked_pad_param_32_chip_50percentdata_datadB_no_date.pth'
+                        Path(config['save_dir']['models']) / f'{config["model_config"]["type"]}_{now}_epoch_{epoch}_{scheduler_type}_32chip_2pctdata_datadB.pth'
                     )
                     torch.save(accelerator.get_state_dict(model), model_path)
 
@@ -624,7 +736,13 @@ def main():
                             wandb_manager=wandb_manager,
                         )
 
-            scheduler.step()
+            # Step scheduler per epoch
+            if scheduler_type == 'ReduceLROnPlateau':
+                # ReduceLROnPlateau needs validation loss
+                scheduler.step(test_loss)
+            elif scheduler_type not in ['OneCycleLR', 'WarmupCosine']:
+                # These schedulers step per batch, so skip epoch-level stepping
+                scheduler.step()
 
         # Run visual validation at the end (before cleanup)
         if not killer.kill_now and epoch == config['train_config']['num_epochs']:
@@ -651,14 +769,14 @@ def main():
         # Save final checkpoint only if training completed normally (only from main process)
         if not killer.kill_now and 'epoch' in locals() and epoch == config['train_config']['num_epochs']:
             if accelerator.is_main_process:
-                final_checkpoint_path = Path(config['save_dir']['checkpoints']) / f'final_checkpoint_{now}_nan_param_masked_pad_param_32_chip_50percentdata_datadB_no_date.pth'
+                final_checkpoint_path = Path(config['save_dir']['checkpoints']) / f'final_checkpoint_{now}_{scheduler_type}_32chip_2pctdata_datadB.pth'
                 save_checkpoint(
                     model, optimizer, scheduler, epoch, config, metrics_history, final_checkpoint_path, accelerator
                 )
 
                 # Save final model
                 final_model_path = (
-                    Path(config['save_dir']['models']) / f'{config["model_config"]["type"]}_{now}_final.pth'
+                    Path(config['save_dir']['models']) / f'{config["model_config"]["type"]}_{now}_{scheduler_type}_final.pth'
                 )
                 torch.save(accelerator.get_state_dict(model), final_model_path)
 

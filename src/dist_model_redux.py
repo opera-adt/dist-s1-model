@@ -174,7 +174,7 @@ class SpatioTemporalTransformerRedux(nn.Module):
         logvar = self.logvar_out(output)
         
         # Clamp outputs to prevent extreme values
-        mean = torch.clamp(mean, min=-10.0, max=10.0)
+        mean = torch.clamp(mean, min=-30.0, max=10.0)
         logvar = torch.clamp(logvar, min=-10.0, max=5.0)  # Prevent extremely large variances
 
         mean = mean.view(B, T, self.num_patches, self.data_dim)

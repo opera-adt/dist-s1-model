@@ -1468,15 +1468,14 @@ def show_prediction_vs_groundtruth_wandb(
             std_vmin_list.append(np.percentile(std_ch_data, 2))
             std_vmax_list.append(np.percentile(std_ch_data, 98))
 
-    # Date string
+    # Date string (acq_dt_float is now relative time in years from post image)
     date_str = ""
     if acq_dt_float is not None:
-        base_date = datetime.datetime(2014, 1, 1)
         if acq_dt_float == pad_val:
             date_str = "padding"
         else:
-            date = base_date + datetime.timedelta(days=float(acq_dt_float) * 365.25)
-            date_str = date.strftime("%Y-%m-%d")
+            # acq_dt_float is now relative time in years from post image
+            date_str = f"{float(acq_dt_float):.2f} yrs before post"
 
     # Figure: 5 rows (T-2, T-1, Prediction, Ground Truth, Std)
     fig_width = 5 * num_channels + 2
@@ -1562,19 +1561,8 @@ def get_test_batch(test_loader, model, device, config):
             target_batch = batch["post_img"].to(device, non_blocking=True)  # (B, C, H, W)
             acq_dts_float = batch["acq_dts_float"].to(device, non_blocking=True).float()  # (B, T+1)
 
-            # Apply dB conversion if enabled in config (must match training!)
-            if config['train_config'].get('use_db_conversion', False):
-                from trainer_redux import convert_to_db
-                db_epsilon = float(config['train_config'].get('db_epsilon', 1e-10))
-                db_min = float(config['train_config'].get('db_min', -30.0))
-                db_max = float(config['train_config'].get('db_max', 10.0))
-
-                pre_imgs = convert_to_db(pre_imgs, epsilon=db_epsilon, db_min=db_min, db_max=db_max)
-                target_batch = convert_to_db(target_batch, epsilon=db_epsilon, db_min=db_min, db_max=db_max)
-            else:
-                # Original clamping for non-dB data
-                pre_imgs.clamp_(0, math.pi)
-                target_batch.clamp_(0, math.pi)
+            # Note: dB conversion and despeckling are now applied in dataset.py
+            # No additional preprocessing needed here
 
             # Cut acq_dts_float to match input length
             acq_dts_input = acq_dts_float[:, :-1]  # (B, T)

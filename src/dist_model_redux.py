@@ -3,6 +3,28 @@ import torch
 import torch.nn as nn
 
 
+class MLPTimeEmbedding(nn.Module):
+    """MLP-based time embedding for encoding relative acquisition times."""
+    def __init__(self, out_dim=128):
+        super().__init__()
+        self.project = nn.Sequential(
+            nn.Linear(1, 128),
+            nn.ReLU(),
+            nn.Linear(128, out_dim)
+        )
+
+    def forward(self, acq_dts_float):
+        """
+        Args:
+            acq_dts_float: Tensor of shape (B, T) — relative time in years from post image
+        Returns:
+            time_emb: Tensor of shape (B, T, out_dim)
+        """
+        # Add feature dimension
+        t = acq_dts_float.unsqueeze(-1)  # (B, T, 1)
+        return self.project(t)            # (B, T, out_dim)
+
+
 class TransformerEncoderWithMask(nn.TransformerEncoder):
     """
     Drop-in replacement for nn.TransformerEncoder that supports per-batch attn_mask. Used to mask out "one way attention" of queries for NaNs
@@ -54,6 +76,9 @@ class SpatioTemporalTransformerRedux(nn.Module):
 
         # Positional temporal embedding based on sequence position (not date)
         self.temporal_pos_embed = nn.Parameter(torch.zeros(1, self.max_seq_len, 1, self.d_model))
+
+        # MLP-based time encoding for relative acquisition times
+        self.time_encoder = MLPTimeEmbedding(out_dim=self.d_model)
 
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=self.d_model,
@@ -128,9 +153,11 @@ class SpatioTemporalTransformerRedux(nn.Module):
         seq_nan_mask = patch_nan_mask.reshape(B, L)  # (B, L)
         seq_pad_mask = patch_pad_mask.reshape(B, L)  # (B, L)
 
-        # Use positional temporal encoding based on sequence position (ignore acq_dts_float)
-        temporal_emb = self.temporal_pos_embed[:, :T, :, :]  # (1, T, 1, d_model)
-        temporal_emb = temporal_emb.expand(B, -1, self.num_patches, -1)  # (B, T, P, d_model)
+        # Generate temporal embeddings from relative acquisition dates
+        # Replace any NaN values in acquisition dates with 0
+        acq_dts_clamped = torch.where(torch.isnan(acq_dts_float), torch.zeros_like(acq_dts_float), acq_dts_float)
+        temporal_emb = self.time_encoder(acq_dts_clamped)  # (B, T, d_model)
+        temporal_emb = temporal_emb.unsqueeze(2).expand(-1, -1, self.num_patches, -1)  # (B, T, P, d_model)
 
         #Define inputs
         x = self.embedding(x) + self.spatial_pos_embed + temporal_emb

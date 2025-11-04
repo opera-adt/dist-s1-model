@@ -2,7 +2,7 @@
 use_wandb: True
 wandb_entity: cmarshak-nasa-jet-propulsion-laboratory  # Your organization/team name (e.g., "my-org" or "username")
 wandb_project: spatiotemporal-transformer-v2
-wandb_run_name: WarmupCosine - 32 chip, 2% data, db Transform # Will auto-generate if null
+wandb_run_name: Despeckle + dB + RelativeTime MLP - 32 chip # Will auto-generate if null
 resume_wandb_run_id: null  # Set to resume a specific wandb run
 
 # Resume training
@@ -12,6 +12,12 @@ resume_checkpoint: null  # Path to checkpoint file to resume from
 data:
   data_dir_path: "/scratch/opera-dist-ml/dist-s1-data-updated/"  # path to directory with dataset_samples_npz and npz_samples
   #data_dir_path: "/u/aurora-r0/jmauro"  # path to directory with dataset_samples_npz and npz_samples
+
+  # Dataset preprocessing (applied in dataset.py __getitem__)
+  # NOTE: Data is automatically despeckled (bilinear interpolation) and converted to dB scale
+  # NOTE: Acquisition times are converted to relative times (years from post image)
+  apply_despeckle: true
+  apply_db_transform: true
   
 # Model configuration
 model_config:
@@ -65,7 +71,8 @@ train_config:
 
   checkpoint_freq: 5  # Save checkpoint every N epochs
   # dB conversion settings
-  use_db_conversion: true  # Enable dB scale conversion for SAR data
+  # NOTE: Set to false since dB conversion is now done in dataset.py
+  use_db_conversion: false  # Enable dB scale conversion for SAR data (DISABLED - done in dataset)
   db_epsilon: 1e-10  # Small value to avoid log(0)
   db_min: -30.0  # Minimum dB value for clipping
   db_max: 10.0  # Maximum dB value for clipping
@@ -92,5 +99,10 @@ validation:
 
 # Additional notes
 training_notes:
-  description: "Summer model, aurora data"
+  description: "Despeckled + dB transform + relative time MLP encoding model"
   bursts: "all"
+  preprocessing: |
+    - Data is despeckled using bilinear interpolation (distmetrics) in dataset loader
+    - Data is converted to dB scale (10*log10) in dataset loader
+    - Acquisition times are converted to relative years from post image
+    - Model uses MLP-based time encoding (replaces positional temporal embedding)

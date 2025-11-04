@@ -697,7 +697,7 @@ def main():
 
             # Save checkpoint (only from main process)
             if epoch % config['train_config']['checkpoint_freq'] == 0:
-                checkpoint_path = Path(config['save_dir']['checkpoints']) / f'checkpoint_epoch_{epoch}_{now}_{scheduler_type}_32chip_2pctdata_datadB.pth'
+                checkpoint_path = Path(config['save_dir']['checkpoints']) / f'checkpoint_despeckled_db_relativetime_epoch_{epoch}_{now}_{scheduler_type}.pth'
                 save_checkpoint(
                     model, optimizer, scheduler, epoch, config, metrics_history, checkpoint_path, accelerator
                 )
@@ -705,7 +705,7 @@ def main():
                 # Save model (only from main process)
                 if accelerator.is_main_process:
                     model_path = (
-                        Path(config['save_dir']['models']) / f'{config["model_config"]["type"]}_{now}_epoch_{epoch}_{scheduler_type}_32chip_2pctdata_datadB.pth'
+                        Path(config['save_dir']['models']) / f'{config["model_config"]["type"]}_despeckled_db_relativetime_epoch_{epoch}_{now}_{scheduler_type}.pth'
                     )
                     torch.save(accelerator.get_state_dict(model), model_path)
 
@@ -769,14 +769,14 @@ def main():
         # Save final checkpoint only if training completed normally (only from main process)
         if not killer.kill_now and 'epoch' in locals() and epoch == config['train_config']['num_epochs']:
             if accelerator.is_main_process:
-                final_checkpoint_path = Path(config['save_dir']['checkpoints']) / f'final_checkpoint_{now}_{scheduler_type}_32chip_2pctdata_datadB.pth'
+                final_checkpoint_path = Path(config['save_dir']['checkpoints']) / f'final_checkpoint_despeckled_db_relativetime_{now}_{scheduler_type}.pth'
                 save_checkpoint(
                     model, optimizer, scheduler, epoch, config, metrics_history, final_checkpoint_path, accelerator
                 )
 
                 # Save final model
                 final_model_path = (
-                    Path(config['save_dir']['models']) / f'{config["model_config"]["type"]}_{now}_{scheduler_type}_final.pth'
+                    Path(config['save_dir']['models']) / f'{config["model_config"]["type"]}_despeckled_db_relativetime_final_{now}_{scheduler_type}.pth'
                 )
                 torch.save(accelerator.get_state_dict(model), final_model_path)
 

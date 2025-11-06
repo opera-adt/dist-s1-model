@@ -117,10 +117,10 @@ class SpatioTemporalTransformerRedux(nn.Module):
         if nan_mask.any():
             token = self.nan_token.view(1, 1, -1, 1, 1)  # (1,1,C,1,1) broadcasts to (B,T,C,H,W)
             # Clamp token values to prevent extreme values
-            token = torch.clamp(token, min=-10.0, max=10.0)
+            token = torch.clamp(token, min=-30.0, max=10.0)
             x = torch.where(nan_mask, token, x)
         # Additional safety: clamp the entire tensor to prevent extreme values
-        x = torch.clamp(x, min=-10.0, max=10.0)
+        x = torch.clamp(x, min=-30.0, max=10.0)
         return x
 
     def forward(self, img_baseline: torch.Tensor, acq_dts_float: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:

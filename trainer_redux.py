@@ -146,6 +146,12 @@ def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accele
 
             train_batch = convert_to_db(train_batch, epsilon=db_epsilon, db_min=db_min, db_max=db_max)
             target_batch = convert_to_db(target_batch, epsilon=db_epsilon, db_min=db_min, db_max=db_max)
+        elif config['data'].get('apply_db_transform', False):
+            # Data is already in dB from dataset.py, just clamp to valid range
+            db_min = float(config['train_config'].get('db_min', -30.0))
+            db_max = float(config['train_config'].get('db_max', 10.0))
+            train_batch.clamp_(db_min, db_max)
+            target_batch.clamp_(db_min, db_max)
         else:
             # Original clamping for non-dB data
             train_batch.clamp_(0, math.pi)
@@ -385,9 +391,9 @@ def main():
     # Load full dataset
     dist_dataset = DistS1Dataset(config['data']['data_dir_path'])
 
-    # Pick 20% of dataset
+    # Pick 2.5% of dataset
 
-    subset_size = int(0.02 * len(dist_dataset))
+    subset_size = int(0.025 * len(dist_dataset))
     generator = torch.Generator().manual_seed(42)
     subset_indices = torch.randperm(len(dist_dataset), generator=generator)[:subset_size].tolist()  # convert to ints
     small_dataset = Subset(dist_dataset, subset_indices)
@@ -661,10 +667,10 @@ def main():
                     step=epoch,
                 )
 
-                print(f'Train Loss: {train_loss:.6f}, Test Loss: {test_loss:.6f}')
-                print(f'Train MSE: {train_mse:.6f}, Test MSE: {test_mse:.6f}')
-                print(f'Test Naive NLL: {test_naive_nll:.6f}, Test Naive MSE: {test_naive_mse:.6f}')
-                print(f'Time: {(time.time() - epoch_start_time) / 60:.2f} minutes\n')
+                #print(f'Train Loss: {train_loss:.6f}, Test Loss: {test_loss:.6f}')
+                #print(f'Train MSE: {train_mse:.6f}, Test MSE: {test_mse:.6f}')
+               # print(f'Test Naive NLL: {test_naive_nll:.6f}, Test Naive MSE: {test_naive_mse:.6f}')
+               # print(f'Time: {(time.time() - epoch_start_time) / 60:.2f} minutes\n')
 
             # Wait for all processes to finish the epoch
             accelerator.wait_for_everyone()

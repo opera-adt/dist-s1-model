@@ -2,7 +2,7 @@
 use_wandb: True
 wandb_entity: cmarshak-nasa-jet-propulsion-laboratory  # Your organization/team name (e.g., "my-org" or "username")
 wandb_project: spatiotemporal-transformer-v2
-wandb_run_name: V3-Factorized-Attention-Fourier-15pre-Nopadding-fixed-length-raw-dates # Will auto-generate if null
+wandb_run_name: V3-Factorized-Attention-Fourier-15pre-Regularized-NLL-raw-dates # Will auto-generate if null
 resume_wandb_run_id: null  # Set to resume a specific wandb run
 
 # Resume training
@@ -76,6 +76,11 @@ train_config:
   min_lr_ratio: 0.0  # Minimum LR as a ratio of base LR (0.0 = decay to 0, 0.1 = decay to 10% of base LR)
 
   checkpoint_freq: 5  # Save checkpoint every N epochs
+
+  # Regularized NLL loss parameters
+  variance_penalty: 0.1  # Weight for variance regularization term
+  min_variance: -2.0  # Target minimum log-variance (variance ~0.135)
+
   # dB conversion settings
   # NOTE: Set to false since dB conversion is now done in dataset.py
   use_db_conversion: false  # Enable dB scale conversion for SAR data (DISABLED - done in dataset)
@@ -105,10 +110,12 @@ validation:
 
 # Additional notes
 training_notes:
-  description: "Redux: Training with RAW dates (absolute fractional years)"
+  description: "Redux: Regularized NLL Loss with RAW dates"
   bursts: "all"
   changes: |
-    - MAJOR: Training data loader uses RAW acquisition dates (absolute fractional years)
+    - MAJOR: Uses REGULARIZED NLL LOSS to combat small variance predictions
+    - Regularization penalty: prevents model from predicting overly confident (small) variances
+    - Training data loader uses RAW acquisition dates (absolute fractional years)
     - Each pre-image has its raw acquisition timestamp
     - Reverted model size to working config: input_size=32, d_model=256, 4 layers
     - Fixed-length sequences (temporal_length=15, no padding)
@@ -116,3 +123,4 @@ training_notes:
     - Fourier embedding for raw time encoding
     - Uses parquet-based data loading from npz_paths.parquet
     - Preprocessing: GPU-accelerated despeckling + dB transform
+    - Loss function handles NaN values via masking

@@ -27,12 +27,13 @@ from src.utils import (
     load_validation_data,
     nll_gaussian,
     nll_gaussian_stable,
+    nll_gaussian_regularized,
     run_final_validation,
     save_checkpoint,
     save_emergency_state,
     setup_warnings,
     validate_visual,
-    show_prediction_vs_groundtruth_wandb, 
+    show_prediction_vs_groundtruth_wandb,
     get_test_batch
 )
 from torch.optim.lr_scheduler import StepLR, CosineAnnealingLR, OneCycleLR, CosineAnnealingWarmRestarts, ReduceLROnPlateau, LambdaLR
@@ -211,7 +212,11 @@ def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accele
             if torch.isinf(pred_logvars).any():
                 print(f"Inf detected in pred_logvars at batch {batch_idx}")
 
-            loss = nll_gaussian(pred_means, pred_logvars, target_batch, mask=mask, pi = pi)
+            # Use regularized NLL loss to prevent overly confident predictions
+            variance_penalty = config['train_config'].get('variance_penalty', 0.1)
+            min_variance = config['train_config'].get('min_variance', -2.0)
+            loss = nll_gaussian_regularized(pred_means, pred_logvars, target_batch, mask=mask, pi=pi,
+                                           variance_penalty=variance_penalty, min_variance=min_variance)
             mse_loss = F.mse_loss(pred_means, target_batch)
 
             # Debug loss values - print every batch
@@ -286,7 +291,11 @@ def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accele
                     print(f"NaN detected in validation pred_logvars at batch {batch_idx}")
                 
                 mask = ~torch.isnan(target_batch)
-                loss = nll_gaussian(pred_means, pred_logvars, target_batch, mask = mask)
+                # Use same regularized loss for validation
+                variance_penalty = config['train_config'].get('variance_penalty', 0.1)
+                min_variance = config['train_config'].get('min_variance', -2.0)
+                loss = nll_gaussian_regularized(pred_means, pred_logvars, target_batch, mask=mask, pi=pi,
+                                               variance_penalty=variance_penalty, min_variance=min_variance)
                 mse_loss = F.mse_loss(pred_means, target_batch)
                 
                 # Debug validation loss values
@@ -876,7 +885,7 @@ def main():
 
             # Save checkpoint (only from main process)
             if epoch % config['train_config']['checkpoint_freq'] == 0:
-                checkpoint_path = Path(config['save_dir']['checkpoints']) / f'checkpoint_redux_raw_dates_epoch_{epoch}_{now}_{scheduler_type}.pth'
+                checkpoint_path = Path(config['save_dir']['checkpoints']) / f'checkpoint_redux_regularized_nll_epoch_{epoch}_{now}_{scheduler_type}.pth'
                 save_checkpoint(
                     model, optimizer, scheduler, epoch, config, metrics_history, checkpoint_path, accelerator
                 )
@@ -884,7 +893,7 @@ def main():
                 # Save model (only from main process)
                 if accelerator.is_main_process:
                     model_path = (
-                        Path(config['save_dir']['models']) / f'{config["model_config"]["type"]}_redux_raw_dates_epoch_{epoch}_{now}_{scheduler_type}.pth'
+                        Path(config['save_dir']['models']) / f'{config["model_config"]["type"]}_redux_regularized_nll_epoch_{epoch}_{now}_{scheduler_type}.pth'
                     )
                     torch.save(accelerator.get_state_dict(model), model_path)
 
@@ -948,14 +957,14 @@ def main():
         # Save final checkpoint only if training completed normally (only from main process)
         if not killer.kill_now and 'epoch' in locals() and epoch == config['train_config']['num_epochs']:
             if accelerator.is_main_process:
-                final_checkpoint_path = Path(config['save_dir']['checkpoints']) / f'final_checkpoint_redux_raw_dates_{now}_{scheduler_type}.pth'
+                final_checkpoint_path = Path(config['save_dir']['checkpoints']) / f'final_checkpoint_redux_regularized_nll_{now}_{scheduler_type}.pth'
                 save_checkpoint(
                     model, optimizer, scheduler, epoch, config, metrics_history, final_checkpoint_path, accelerator
                 )
 
                 # Save final model
                 final_model_path = (
-                    Path(config['save_dir']['models']) / f'{config["model_config"]["type"]}_redux_raw_dates_final_{now}_{scheduler_type}.pth'
+                    Path(config['save_dir']['models']) / f'{config["model_config"]["type"]}_redux_regularized_nll_final_{now}_{scheduler_type}.pth'
                 )
                 torch.save(accelerator.get_state_dict(model), final_model_path)
 

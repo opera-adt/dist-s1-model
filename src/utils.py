@@ -170,7 +170,7 @@ def nll_gaussian_stable(mean, variance, value, mask=None, pi=None, eps=1e-6):
     """
     Numerically stable negative log-likelihood of Gaussian with masking,
     avoiding any computation at invalid (masked out) positions.
-    
+
     Args:
         mean: Mean tensor
         variance: Variance tensor (must be > 0)
@@ -197,9 +197,55 @@ def nll_gaussian_stable(mean, variance, value, mask=None, pi=None, eps=1e-6):
 
     logvar = torch.log(variance)
     nll_element = (value - mean).pow(2) / variance + logvar + torch.log(2 * pi)
-    
+
     loss = 0.5 * nll_element.mean()
     return loss
+
+
+def nll_gaussian_regularized(mean, logvar, value, mask=None, pi=None, variance_penalty=0.1, min_variance=-2.0):
+    """
+    Regularized NLL loss that penalizes predicted variances that are too small.
+    This helps prevent the model from collapsing to overly confident predictions.
+
+    Args:
+        mean: Mean predictions
+        logvar: Log-variance predictions
+        value: Target values
+        mask: Boolean tensor, True where data is valid (ignores NaNs)
+        pi: Optional precomputed pi tensor
+        variance_penalty: Weight for the variance regularization term
+        min_variance: Target minimum log-variance (default -2.0 corresponds to variance ~0.135)
+    Returns:
+        Scalar loss: NLL + variance regularization
+    """
+    assert mean.shape == logvar.shape == value.shape
+
+    if pi is None:
+        pi = torch.FloatTensor([np.pi]).to(value.device)
+
+    # Default mask: everything is valid
+    if mask is None:
+        mask = torch.ones_like(value, dtype=torch.bool)
+    else:
+        mask = mask.bool()
+
+    # Only compute on valid entries (ignoring NaNs)
+    valid_mean = mean[mask]
+    valid_logvar = logvar[mask]
+    valid_value = value[mask]
+
+    # Compute standard NLL only on valid entries
+    nll_element = ((valid_value - valid_mean) ** 2) / torch.exp(valid_logvar) + valid_logvar + torch.log(2 * pi)
+    nll_loss = 0.5 * nll_element.mean()
+
+    # Regularization: penalize log-variances below min_variance
+    # This encourages the model to predict larger uncertainties
+    variance_reg = torch.relu(min_variance - valid_logvar).mean()
+
+    # Total loss
+    total_loss = nll_loss + variance_penalty * variance_reg
+
+    return total_loss
 
 def spatial_smoothness_loss(logvar, weight=0.1):
     """Penalize large differences between neighboring pixels"""
@@ -957,7 +1003,11 @@ def load_config(config_path):
     model_cfg['nhead'] = int(model_cfg['nhead'])
     model_cfg['num_encoder_layers'] = int(model_cfg['num_encoder_layers'])
     model_cfg['dim_feedforward'] = int(model_cfg['dim_feedforward'])
-    model_cfg['max_seq_len'] = int(model_cfg['max_seq_len'])
+    # Handle both max_seq_len (older configs) and temporal_length (newer configs)
+    if 'max_seq_len' in model_cfg:
+        model_cfg['max_seq_len'] = int(model_cfg['max_seq_len'])
+    if 'temporal_length' in model_cfg:
+        model_cfg['temporal_length'] = int(model_cfg['temporal_length'])
     model_cfg['dropout'] = float(model_cfg['dropout'])
     
     return config

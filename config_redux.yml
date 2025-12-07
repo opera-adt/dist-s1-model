@@ -2,7 +2,7 @@
 use_wandb: True
 wandb_entity: cmarshak-nasa-jet-propulsion-laboratory  # Your organization/team name (e.g., "my-org" or "username")
 wandb_project: spatiotemporal-transformer-v2
-wandb_run_name: Despeckle + dB + RelativeTime MLP - 32 chip # Will auto-generate if null
+wandb_run_name: V3-Factorized-Attention-Fourier-15pre-Nopadding-fixed-length-raw-dates # Will auto-generate if null
 resume_wandb_run_id: null  # Set to resume a specific wandb run
 
 # Resume training
@@ -10,39 +10,45 @@ resume_checkpoint: null  # Path to checkpoint file to resume from
 
 # Data paths
 data:
-  data_dir_path: "/scratch/opera-dist-ml/dist-s1-data-updated/"  # path to directory with dataset_samples_npz and npz_samples
-  #data_dir_path: "/u/aurora-r0/jmauro"  # path to directory with dataset_samples_npz and npz_samples
+  data_dir_path: "/scratch/opera-dist-ml/users/jmauro/dist-s1-model"  # path to npz_paths.parquet
 
-  # Dataset preprocessing (applied in dataset.py __getitem__)
-  # NOTE: Data is automatically despeckled (bilinear interpolation) and converted to dB scale
-  # NOTE: Acquisition times are converted to relative times (years from post image)
-  apply_despeckle: true
-  apply_db_transform: true
+  # V3 Dataset configuration
+  temporal_length: 15  # Fixed number of pre-images (no padding)
+  random_selection: false  # If false, take last temporal_length frames; if true, random sample
+
+  # GPU preprocessing settings
+  preprocess_on_gpu: true  # Enable GPU-accelerated preprocessing in data loader
+  apply_despeckle: true  # Done on GPU in collate function
+  apply_db_transform: true  # Done on GPU in collate function
   
 # Model configuration
 model_config:
-  type: "transformer"
-  patch_size: 8
-  input_size: 32
-  data_dim: 128  # 2*patch_size*patch_size
-  d_model: 256
+  type: "transformer_v3"
+  patch_size: 8  # REVERTED: Back to 8
+  input_size: 32  # REVERTED: Back to 32 (320m x 320m at 10m resolution)
+  data_dim: 128  # REVERTED: Back to 128 (2*patch_size*patch_size = 2*8*8)
+  d_model: 256  # REVERTED: Back to 256
   nhead: 4
-  num_encoder_layers: 4
-  dim_feedforward: 768
-  max_seq_len: 21 # for new dataset
-  dropout: 0.2
+  num_encoder_layers: 4  # REVERTED: Back to 4
+  dim_feedforward: 768  # REVERTED: Back to 768
+  temporal_length: 15  # Fixed temporal length - must match data.temporal_length
+  dropout: 0.2  # REVERTED: Back to 0.2
   activation: "gelu"
+
+  # Fourier embedding settings
+  fourier_freqs: 64  # Number of frequency bands for Fourier features
+  fourier_max_freq: 10.0  # Maximum frequency (in 1/years)
 
 # Training configuration
 train_config:
-  batch_size: 2
-  num_epochs: 200
-  input_size: 32
-  learning_rate: 0.00015 # 1e-4
+  batch_size: 4  # REVERTED: Back to 4
+  num_epochs: 200  # Keep at 200
+  input_size: 32  # REVERTED: Back to 32 (must match model_config.input_size)
+  learning_rate: 0.0001  # REVERTED: Back to 0.0001 (1e-4)
   seed: 177
 
   # Scheduler configuration
-  scheduler_type: "WarmupCosine"  # Options: "StepLR", "CosineAnnealingLR", "OneCycleLR", "CosineAnnealingWarmRestarts", "ReduceLROnPlateau", "WarmupCosine"
+  scheduler_type: "CosineAnnealingLR"  # Options: "StepLR", "CosineAnnealingLR", "OneCycleLR", "CosineAnnealingWarmRestarts", "ReduceLROnPlateau", "WarmupCosine"
 
   # StepLR scheduler params:
   step_size: 25  # For StepLR - decay after N epochs
@@ -99,10 +105,14 @@ validation:
 
 # Additional notes
 training_notes:
-  description: "Despeckled + dB transform + relative time MLP encoding model"
+  description: "Redux: Training with RAW dates (absolute fractional years)"
   bursts: "all"
-  preprocessing: |
-    - Data is despeckled using bilinear interpolation (distmetrics) in dataset loader
-    - Data is converted to dB scale (10*log10) in dataset loader
-    - Acquisition times are converted to relative years from post image
-    - Model uses MLP-based time encoding (replaces positional temporal embedding)
+  changes: |
+    - MAJOR: Training data loader uses RAW acquisition dates (absolute fractional years)
+    - Each pre-image has its raw acquisition timestamp
+    - Reverted model size to working config: input_size=32, d_model=256, 4 layers
+    - Fixed-length sequences (temporal_length=15, no padding)
+    - Factorized attention: separate spatial and temporal transformers (TimeSformer-style)
+    - Fourier embedding for raw time encoding
+    - Uses parquet-based data loading from npz_paths.parquet
+    - Preprocessing: GPU-accelerated despeckling + dB transform

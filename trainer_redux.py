@@ -138,6 +138,11 @@ def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accele
         target_batch = target_batch.to(device, non_blocking=True)
         acq_dts_float = acq_dts_float.to(device, dtype=torch.float32, non_blocking=True)
 
+        # Use raw acquisition dates (not relative)
+        # acq_dts_float shape: (B, T+1) where last element is post_time
+        # We only use the first T elements (pre image times)
+        acq_dts_float = acq_dts_float[:, :-1]  # (B, T) - pre image times only
+
         # Apply dB conversion if enabled in config
         if config['train_config'].get('use_db_conversion', False):
             db_epsilon = float(config['train_config'].get('db_epsilon', 1e-10))
@@ -152,13 +157,19 @@ def run_epoch_tf(dataloader, model, optimizer, device, pi, epoch, killer, accele
             db_max = float(config['train_config'].get('db_max', 10.0))
             train_batch.clamp_(db_min, db_max)
             target_batch.clamp_(db_min, db_max)
+        elif config['data'].get('preprocess_on_gpu', False):
+            # Data is already in dB from GPU collate function, just clamp to valid range
+            db_min = float(config['train_config'].get('db_min', -30.0))
+            db_max = float(config['train_config'].get('db_max', 10.0))
+            train_batch.clamp_(db_min, db_max)
+            target_batch.clamp_(db_min, db_max)
         else:
             # Original clamping for non-dB data
             train_batch.clamp_(0, math.pi)
             target_batch.clamp_(0, math.pi)
 
-        # Extract temporal info before reshaping
-        acq_dts_input = acq_dts_float[:, :-1]  # (B, T) - match pre_imgs length
+        # acq_dts_float is already (B, T) raw acquisition dates
+        acq_dts_input = acq_dts_float  # (B, T) - raw acquisition dates
 
         # Calculate patch dimensions from original data before reshaping
         B_orig, T, C, H_orig, W_orig = train_batch.shape
@@ -332,18 +343,146 @@ def left_pad_torch(sequences, T_max, nodata_value=-9999.0):
     return padded, lengths
 
 
-def custom_collate_fn(batch, T_max=21):
-    pre_imgs = [torch.tensor(item['pre_imgs']) for item in batch]
-    post_img = torch.stack([torch.tensor(item['post_img']) for item in batch])
-    dts = [torch.tensor(item['acq_dts_float']) for item in batch]
+def gpu_despeckle_bilinear(img_tensor, n_iter=10, preserve_exterior_mask=True):
+    """
+    GPU-accelerated bilinear interpolation for despeckling.
+    Matches the CPU implementation in distmetrics.nd_tools.iterative_linear_interpolate.
 
-    padded_pre_imgs, _ = left_pad_torch(pre_imgs, T_max, nodata_value=-9999.0)
-    padded_dts, _ = left_pad_torch(dts, T_max + 1, nodata_value=float('nan'))
+    Uses 8-neighbor kernel: [[1,1,1], [1,0,1], [1,1,1]]
+
+    Args:
+        img_tensor: Tensor of shape (..., C, H, W) with NaN values to interpolate
+        n_iter: Number of iterations for interpolation
+        preserve_exterior_mask: Whether to preserve exterior NaN mask
+
+    Returns:
+        Despeckled tensor of same shape
+    """
+    device = img_tensor.device
+    original_shape = img_tensor.shape
+
+    # Flatten all batch dimensions except C, H, W
+    if len(original_shape) > 3:
+        img_tensor = img_tensor.reshape(-1, *original_shape[-3:])
+
+    result = img_tensor.clone()
+
+    # Store original exterior mask if needed
+    if preserve_exterior_mask:
+        original_nan_mask = torch.isnan(img_tensor)
+
+    # 8-neighbor kernel matching CPU implementation
+    # [[1,1,1], [1,0,1], [1,1,1]]
+    kernel = torch.tensor([[1., 1., 1.],
+                           [1., 0., 1.],
+                           [1., 1., 1.]], device=device).view(1, 1, 3, 3)
+
+    for _ in range(n_iter):
+        nan_mask = torch.isnan(result)
+
+        if not nan_mask.any():
+            break
+
+        # Process each channel
+        for c in range(result.shape[-3]):
+            channel = result[..., c, :, :].unsqueeze(1)  # Add channel dim for conv2d
+            channel_mask = nan_mask[..., c, :, :].unsqueeze(1)
+
+            if not channel_mask.any():
+                continue
+
+            # Set NaNs to zero temporarily
+            temp = torch.where(channel_mask, torch.zeros_like(channel), channel)
+
+            # Count valid neighbors using convolution
+            valid = (~channel_mask).float()
+            weight = F.conv2d(valid, kernel, padding=1)
+            smoothed = F.conv2d(temp, kernel, padding=1)
+
+            # Avoid division by zero
+            interp_values = smoothed / (weight + 1e-10)
+
+            # Fill only the NaN locations that have valid neighbors
+            updates = channel_mask & (weight > 0)
+            channel = torch.where(updates, interp_values, channel)
+
+            result[..., c, :, :] = channel.squeeze(1)
+
+    # Preserve exterior mask if requested
+    if preserve_exterior_mask:
+        # Restore original NaN mask (exterior NaNs remain NaN)
+        result = torch.where(original_nan_mask, torch.tensor(float('nan'), device=device), result)
+
+    # Reshape back to original shape
+    if len(original_shape) > 3:
+        result = result.reshape(original_shape)
+
+    return result
+
+
+def gpu_to_db(img_tensor, eps=1e-10, db_min=-30.0, db_max=10.0):
+    """
+    GPU-accelerated conversion to dB scale.
+
+    Args:
+        img_tensor: Input tensor with intensity values
+        eps: Small epsilon to avoid log(0)
+        db_min: Minimum dB value for clipping
+        db_max: Maximum dB value for clipping
+
+    Returns:
+        Tensor in dB scale
+    """
+    # Preserve NaN values (no padding in V3)
+    nan_mask = torch.isnan(img_tensor)
+
+    # Convert to dB: 10 * log10(max(img, eps))
+    img_db = 10.0 * torch.log10(torch.clamp(img_tensor, min=eps))
+
+    # Clamp to valid range
+    img_db = torch.clamp(img_db, db_min, db_max)
+
+    # Restore NaN
+    img_db = torch.where(nan_mask, torch.tensor(float('nan'), device=img_tensor.device), img_db)
+
+    return img_db
+
+
+def custom_collate_fn(batch, apply_despeckle=True, apply_db_transform=True, device='cpu'):
+    """
+    Optimized collate function with GPU-accelerated preprocessing.
+    NO PADDING - all sequences are fixed length.
+
+    Args:
+        batch: List of samples from dataset
+        apply_despeckle: Whether to apply despeckling on GPU
+        apply_db_transform: Whether to apply dB transform on GPU
+        device: Device to perform GPU operations ('cpu' or 'cuda')
+    """
+    # Stack tensors - use from_numpy to avoid copy, convert to float32
+    pre_imgs = torch.stack([torch.from_numpy(item['pre_imgs']).float() for item in batch])
+    post_img = torch.stack([torch.from_numpy(item['post_img']).float() for item in batch])
+    acq_dts_float = torch.stack([torch.from_numpy(item['acq_dts_float']).float() for item in batch])
+
+    # Move to GPU if available for preprocessing
+    if device != 'cpu' and torch.cuda.is_available():
+        pre_imgs = pre_imgs.to(device, non_blocking=True)
+        post_img = post_img.to(device, non_blocking=True)
+
+        # Apply GPU-accelerated despeckling (matches CPU implementation exactly)
+        if apply_despeckle:
+            pre_imgs = gpu_despeckle_bilinear(pre_imgs, n_iter=10, preserve_exterior_mask=True)
+            post_img = gpu_despeckle_bilinear(post_img, n_iter=10, preserve_exterior_mask=True)
+
+        # Apply GPU-accelerated dB transform
+        if apply_db_transform:
+            pre_imgs = gpu_to_db(pre_imgs)
+            post_img = gpu_to_db(post_img)
 
     return {
-        'pre_imgs': padded_pre_imgs,
+        'pre_imgs': pre_imgs,
         'post_img': post_img,
-        'acq_dts_float': padded_dts,
+        'acq_dts_float': acq_dts_float,
     }
 
 
@@ -388,32 +527,65 @@ def main():
     # Set random seeds
     torch.manual_seed(config['train_config']['seed'])
     np.random.seed(config['train_config']['seed'])
-    # Load full dataset
-    dist_dataset = DistS1Dataset(config['data']['data_dir_path'])
 
-    # Pick 2.5% of dataset
+    # Load full dataset - V3 version with fixed-length sequences
+    temporal_length = config['data']['temporal_length']
+    random_selection = config['data'].get('random_selection', False)
 
-    subset_size = int(0.025 * len(dist_dataset))
+    dist_dataset = DistS1Dataset(
+        root_dir=config['data']['data_dir_path'],
+        temporal_length=temporal_length,
+        random_selection=random_selection
+    )
+
+    # Use 5% of dataset (increased from 2.5% for better model performance)
+    subset_size = int(0.05 * len(dist_dataset))
     generator = torch.Generator().manual_seed(42)
     subset_indices = torch.randperm(len(dist_dataset), generator=generator)[:subset_size].tolist()  # convert to ints
     small_dataset = Subset(dist_dataset, subset_indices)
 
-    # Split that small subset into train/test (80/20 split here)
+    # Split that subset into train/test (80/20 split here)
     train_size = int(0.8 * len(small_dataset))
     test_size = len(small_dataset) - train_size
     train_dataset, test_dataset = random_split(small_dataset, [train_size, test_size], generator=generator)
 
-    # Dataloaders
+    # Get preprocessing config
+    preprocess_on_gpu = config['data'].get('preprocess_on_gpu', True)
+    apply_despeckle = config['data'].get('apply_despeckle', True)
+    apply_db_transform = config['data'].get('apply_db_transform', True)
+
+    # Create optimized collate function with GPU preprocessing
+    from functools import partial
+    train_collate_fn = partial(
+        custom_collate_fn,
+        apply_despeckle=apply_despeckle,
+        apply_db_transform=apply_db_transform,
+        device='cuda' if preprocess_on_gpu and torch.cuda.is_available() else 'cpu'
+    )
+
+    # Dataloaders with optimized settings
     train_loader = DataLoader(
-        train_dataset, batch_size=config['train_config']['batch_size'], shuffle=True,
-        collate_fn=custom_collate_fn, pin_memory=True, num_workers=6, persistent_workers=True,
-        prefetch_factor=4, multiprocessing_context='fork'
+        train_dataset,
+        batch_size=config['train_config']['batch_size'],
+        shuffle=True,
+        collate_fn=train_collate_fn,
+        pin_memory=False,  # Disabled since we're already on GPU
+        num_workers=8,  # Increased workers for faster data loading
+        persistent_workers=True,
+        prefetch_factor=3,  # Slightly reduced to avoid memory pressure
+        multiprocessing_context='spawn'  # Required for CUDA in workers
     )
 
     test_loader = DataLoader(
-        test_dataset, batch_size=config['train_config']['batch_size'], shuffle=True,
-        collate_fn=custom_collate_fn, pin_memory=True, num_workers=6, persistent_workers=True,
-        prefetch_factor=4, multiprocessing_context='fork'
+        test_dataset,
+        batch_size=config['train_config']['batch_size'],
+        shuffle=False,  # No need to shuffle test data
+        collate_fn=train_collate_fn,
+        pin_memory=False,  # Disabled since we're already on GPU
+        num_workers=8,  # Increased workers for faster data loading
+        persistent_workers=True,
+        prefetch_factor=3,  # Slightly reduced to avoid memory pressure
+        multiprocessing_context='spawn'  # Required for CUDA in workers
     )
 
     # Debug dataset sizes
@@ -558,6 +730,7 @@ def main():
 
     if accelerator.is_main_process:
         print(f'Using input_size: {config["model_config"]["input_size"]}')
+        print(f'Using temporal_length: {config["model_config"]["temporal_length"]} (no padding)')
 
     # Training setup
     pi = torch.FloatTensor([np.pi]).to(accelerator.device)
@@ -703,7 +876,7 @@ def main():
 
             # Save checkpoint (only from main process)
             if epoch % config['train_config']['checkpoint_freq'] == 0:
-                checkpoint_path = Path(config['save_dir']['checkpoints']) / f'checkpoint_despeckled_db_relativetime_epoch_{epoch}_{now}_{scheduler_type}.pth'
+                checkpoint_path = Path(config['save_dir']['checkpoints']) / f'checkpoint_redux_raw_dates_epoch_{epoch}_{now}_{scheduler_type}.pth'
                 save_checkpoint(
                     model, optimizer, scheduler, epoch, config, metrics_history, checkpoint_path, accelerator
                 )
@@ -711,7 +884,7 @@ def main():
                 # Save model (only from main process)
                 if accelerator.is_main_process:
                     model_path = (
-                        Path(config['save_dir']['models']) / f'{config["model_config"]["type"]}_despeckled_db_relativetime_epoch_{epoch}_{now}_{scheduler_type}.pth'
+                        Path(config['save_dir']['models']) / f'{config["model_config"]["type"]}_redux_raw_dates_epoch_{epoch}_{now}_{scheduler_type}.pth'
                     )
                     torch.save(accelerator.get_state_dict(model), model_path)
 
@@ -775,14 +948,14 @@ def main():
         # Save final checkpoint only if training completed normally (only from main process)
         if not killer.kill_now and 'epoch' in locals() and epoch == config['train_config']['num_epochs']:
             if accelerator.is_main_process:
-                final_checkpoint_path = Path(config['save_dir']['checkpoints']) / f'final_checkpoint_despeckled_db_relativetime_{now}_{scheduler_type}.pth'
+                final_checkpoint_path = Path(config['save_dir']['checkpoints']) / f'final_checkpoint_redux_raw_dates_{now}_{scheduler_type}.pth'
                 save_checkpoint(
                     model, optimizer, scheduler, epoch, config, metrics_history, final_checkpoint_path, accelerator
                 )
 
                 # Save final model
                 final_model_path = (
-                    Path(config['save_dir']['models']) / f'{config["model_config"]["type"]}_despeckled_db_relativetime_final_{now}_{scheduler_type}.pth'
+                    Path(config['save_dir']['models']) / f'{config["model_config"]["type"]}_redux_raw_dates_final_{now}_{scheduler_type}.pth'
                 )
                 torch.save(accelerator.get_state_dict(model), final_model_path)
 

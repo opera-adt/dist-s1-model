@@ -1,0 +1,99 @@
+# Clay Temporal Prediction Model Configuration
+# This model uses pre-computed Clay embeddings to predict future SAR images
+
+# WandB settings
+use_wandb: true
+wandb_entity: cmarshak-nasa-jet-propulsion-laboratory
+wandb_project: clay-temporal-prediction
+wandb_run_name: Clay-Temporal-v2-BilinearDecoder-GradLoss0.1
+resume_wandb_run_id: null
+
+# Resume training
+resume_checkpoint: null
+
+# Data paths
+data:
+  embeddings_dir: "clay_embeddings"  # Directory with pre-computed Clay embeddings
+  original_data_dir: "/scratch/opera-dist-ml/users/jmauro/dist-s1-model"  # For original SAR data
+
+  # dB transform settings (SAR data for decoder loss)
+  apply_db_transform: true
+  db_epsilon: 1.0e-10
+  db_min: -30.0
+  db_max: 10.0
+
+# Model configuration
+model_config:
+  # Core transformer dimensions
+  d_model: 512
+  nhead: 8
+  num_encoder_layers: 4
+  dim_feedforward: 2048
+  dropout: 0.1
+
+  # Clay embedding dimensions (fixed by Clay model)
+  clay_dim: 1024
+  clay_spatial: 32  # 32x32 feature maps
+
+  # Spatial processing
+  patch_grid: 16  # Pool 32x32 -> 16x16 = 256 patches
+
+  # Fourier time encoding
+  fourier_freqs: 64
+  fourier_max_freq: 10.0
+
+  # Decoder configuration
+  decoder_hidden_dims: [512, 256, 64]  # Progressive upsampling channels
+
+# Training configuration
+train_config:
+  batch_size: 8
+  num_epochs: 100
+  learning_rate: 0.0001
+  seed: 42
+
+  # Scheduler configuration
+  scheduler_type: "CosineAnnealingLR"
+  eta_min: 0.000001
+
+  # Warmup (for WarmupCosine scheduler)
+  warmup_epochs: 5
+  min_lr_ratio: 0.0
+
+  # Checkpoint frequency
+  checkpoint_freq: 5
+
+  # Loss configuration
+  # Embedding loss (MSE between predicted and actual Clay embedding)
+  embedding_loss_weight: 0.1
+
+  # SAR loss (NLL between predicted and actual SAR)
+  sar_loss_weight: 1.0
+
+  # Asymmetric NLL for SAR decoder (same as trainer_redux)
+  use_asymmetric_loss: true
+  positive_weight: 1.5
+  negative_weight: 1.0
+  variance_penalty: 0.1
+  min_variance: -2.0
+
+  # Spatial gradient sharpness loss
+  # L1 loss on finite differences of pred_sar_mean vs post_sar (NaN-aware).
+  # Speckle gradients cancel across SGD batches; structural edge gradients reinforce.
+  lambda_grad: 0.1
+
+# Save directories
+save_dir:
+  models: "models_clay"
+  checkpoints: "checkpoints_clay"
+
+# Training notes
+training_notes:
+  description: "Clay Temporal Prediction Model - Predicts future SAR from Clay embeddings"
+  changes: |
+    - Uses pre-computed Clay v1.5 embeddings as input
+    - Temporal transformer encodes 15 pre-images with Fourier time embeddings
+    - Cross-attention predicts embedding at target post-date
+    - SAR decoder converts predicted embedding back to SAR space
+    - Dual loss: MSE in embedding space + asymmetric NLL in SAR space
+    - Based on trainer_redux.py architecture patterns
